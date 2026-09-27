@@ -298,14 +298,16 @@ pub fn source_kind(p: &crate::state::Placement) -> &'static str {
 }
 
 /// How a source repo skill's link deploys, for people: `main (working tree, live)`,
-/// `experiment/pdf/terse (worktree, live, pinned)`, `v1.2.0 @ 3f2a1c9 (snapshot, pinned)`.
-pub fn describe(branch: Option<&str>, pinned: bool, source: &str, commit: Option<&str>) -> String {
+/// `experiment/pdf/terse (worktree, live, pinned)`, `v1.2.0 @ 3f2a1c9 (snapshot, pinned)`;
+/// `copy` instead of `live` for a copy (edits show only after linking again).
+pub fn describe(branch: Option<&str>, pinned: bool, source: &str, commit: Option<&str>, copy: bool) -> String {
     let b = branch.unwrap_or("detached");
     let pin = if pinned { ", pinned" } else { "" };
+    let live = if copy { "copy" } else { "live" };
     match (source, commit) {
         ("snapshot", Some(c)) => format!("{b} @ {} (snapshot{pin})", &c[..c.len().min(7)]),
-        ("worktree", _) => format!("{b} (worktree, live{pin})"),
-        _ => format!("{b} (working tree, live{pin})"),
+        ("worktree", _) => format!("{b} (worktree, {live}{pin})"),
+        _ => format!("{b} (working tree, {live}{pin})"),
     }
 }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+- The Links view says `copy` rather than `live` for links that are copies (they don't follow edits).
+- `tricks.toml` completion and validation match the configuration New Tricks actually reads (policies `review`, `pinned`, `paused`; `lint.strict-spec`; removed keys such as `use` dropped).
+- CLI fixes: `update` exits non-zero when it stops on conflicts or fails; `diff` inside an experiment compares the experiment; published provenance never contains a local path or credentials.
+
 ## 0.7.0
 
 - **Experiments** replace editing on a branch, drafts and variants: **Start Experiment…** (a name per skill, on branch `experiment/<skill>/<name>` in its own worktree), **Commit Experiment…**, **Merge Experiment…** (merge locally, merge and keep, or pull request), **Discard Experiment…** and **Open Experiment Folder**. Experiments show under their skill in the Source Repo view, with commit and merge inline. Removed: *Experiment on a Branch…*, *Commit Draft…*, *Merge Branch…*, *Finish Editing* and *Use Variant…*.

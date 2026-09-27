@@ -1796,16 +1796,28 @@ pub fn status(ctx: &Ctx, ws: &SourceRepo) -> Result<RepoStatus> {
     })
 }
 
+/// The checkout that `working` and `head` refer to: the worktree the command runs in (an
+/// experiment's, or any other checkout of the source repo), else the main checkout.
+pub fn checkout_root(ctx: &Ctx, ws: &SourceRepo) -> PathBuf {
+    let cwd = crate::paths::canon(&ctx.opts.cwd).unwrap_or_else(|_| ctx.opts.cwd.clone());
+    git::worktrees(&ws.root)
+        .into_iter()
+        .map(|(p, _)| p)
+        .filter(|p| cwd.starts_with(p))
+        .max_by_key(|p| p.components().count())
+        .unwrap_or_else(|| ws.root.clone())
+}
+
 /// Content of a source repo skill file at B (base), U (upstream) or C (working tree).
 pub fn version_file(ctx: &Ctx, ws: &SourceRepo, name: &str, which: &str, rel: &str) -> Result<Option<Vec<u8>>> {
     let rel = rel.trim_start_matches('/');
     match which {
-        "working" | "C" => Ok(std::fs::read(ws.skill_dir(name)?.join(rel)).ok()),
+        "working" | "C" => Ok(std::fs::read(checkout_root(ctx, ws).join(&ws.skill(name)?.path).join(rel)).ok()),
         "base" | "B" => Ok(sides(ctx, ws, name, Fetch::Never)?.and_then(|sd| std::fs::read(sd.base_dir.join(rel)).ok())),
         "upstream" | "U" => Ok(sides(ctx, ws, name, Fetch::Never)?.and_then(|sd| std::fs::read(sd.up_dir.join(rel)).ok())),
         "head" => {
             let p = format!("{}/{rel}", ws.skill(name)?.path);
-            Ok(git::git_raw(&ws.root, &["show", &format!("HEAD:{p}")]).ok())
+            Ok(git::git_raw(&checkout_root(ctx, ws), &["show", &format!("HEAD:{p}")]).ok())
         }
         "candidate" | "R" => {
             // What the upstream merge would produce, computed in a scratch copy.
@@ -1832,11 +1844,11 @@ fn rev_for(ws: &SourceRepo, name: &str, rev: &str) -> String {
     if git::branch_exists(&ws.root, &exp) { exp } else { rev.to_string() }
 }
 
-/// Files of a source repo skill at a git revision.
-fn files_at(ws: &SourceRepo, name: &str, rev: &str) -> BTreeSet<String> {
+/// Files of a source repo skill at a git revision (of `checkout`, for `HEAD`).
+fn files_at(ws: &SourceRepo, checkout: &Path, name: &str, rev: &str) -> BTreeSet<String> {
     let Ok(s) = ws.skill(name) else { return BTreeSet::new() };
     let prefix = format!("{}/", s.path.trim_end_matches('/'));
-    git(&ws.root, &["ls-tree", "-r", "--name-only", rev, "--", &s.path])
+    git(checkout, &["ls-tree", "-r", "--name-only", rev, "--", &s.path])
         .map(|o| o.lines().filter_map(|l| l.strip_prefix(&prefix)).map(String::from).collect())
         .unwrap_or_default()
 }
@@ -1853,7 +1865,8 @@ pub fn candidate_dir(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<tempfile:
 /// Files that differ between two versions of a source repo skill (for `diff` and the
 /// Changes view).
 pub fn changed_files(ctx: &Ctx, ws: &SourceRepo, name: &str, from: &str, to: &str) -> Result<Vec<String>> {
-    let mut paths = dir_files(&ws.skill_dir(name)?);
+    let checkout = checkout_root(ctx, ws);
+    let mut paths = dir_files(&checkout.join(&ws.skill(name)?.path));
     paths.retain(|p| !p.starts_with(".git/"));
     let sd =
         if [from, to].iter().any(|w| matches!(*w, "base" | "B" | "upstream" | "U")) { sides(ctx, ws, name, Fetch::Never)? } else { None };
@@ -1864,7 +1877,7 @@ pub fn changed_files(ctx: &Ctx, ws: &SourceRepo, name: &str, from: &str, to: &st
     for rev in [from, to] {
         if !matches!(rev, "working" | "C" | "base" | "B" | "upstream" | "U" | "candidate" | "R") {
             let rev = if rev == "head" { "HEAD".to_string() } else { rev_for(ws, name, rev) };
-            paths.extend(files_at(ws, name, &rev));
+            paths.extend(files_at(ws, &checkout, name, &rev));
         }
     }
     // Compute a candidate once rather than per file.

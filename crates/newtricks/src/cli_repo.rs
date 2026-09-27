@@ -130,6 +130,10 @@ pub fn run(ctx: &Ctx, c: Cmd) -> Result<()> {
             } else {
                 emit(json, &r, print_update);
             }
+            // Scripts and CI must see a run that stopped on conflicts or failed a skill.
+            if r.items.iter().any(|i| i.state == "error" || (!dry_run && i.state == "conflicts")) {
+                std::process::exit(1);
+            }
         }
         Cmd::Contribute { skill, title, body, dry_run } => {
             let r = crate::contribute::contribute(ctx, &skill, title.as_deref(), body.as_deref(), dry_run)?;
@@ -404,7 +408,9 @@ fn print_grouped(items: &[crate::links::LinkInfo], dev: bool) {
             let from = l
                 .source
                 .as_deref()
-                .map(|src| format!("  {}", crate::links::describe(l.branch.as_deref(), l.pinned, src, l.commit.as_deref())))
+                .map(|src| {
+                    format!("  {}", crate::links::describe(l.branch.as_deref(), l.pinned, src, l.commit.as_deref(), l.mode == "copy"))
+                })
                 .unwrap_or_default();
             println!("  {what:<28} {:<8} {} ({}){from}{h}", l.agent, l.path, l.mode);
         }

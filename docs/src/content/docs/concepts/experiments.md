@@ -107,8 +107,8 @@ You can also commit in the worktree with plain git or your editor. New Tricks pi
 |---|---|
 | An experiment name | The skill as committed on that experiment of the skill, for example `terse` for `experiment/changelog-writer/terse` |
 | A branch or commit | The skill as committed there, for example `main` or `3f2a1c9` |
-| `head` | The skill at `HEAD` of your main checkout |
-| `working` | The skill in your main checkout's working tree |
+| `head` | The skill at `HEAD` of the checkout you run `diff` in (your main checkout, or an experiment's worktree) |
+| `working` | The skill in that checkout's working tree |
 | `base` | The upstream revision a vendored skill was last updated from |
 
 The default range is `head..working`. `a..` means `a..working`, and `..b` means `head..b`.
@@ -128,7 +128,7 @@ tricks diff changelog-writer head..terse
 +3. One line per change, at most 12 words. No preamble.
 ```
 
-An experiment or branch name means its committed tip. `working` is always your main checkout, even when you run `diff` inside a worktree. To see uncommitted changes in an experiment, run `git diff` in its worktree. `diff` doesn't compare with upstream: it points you to [`outdated --diff` and `update --dry-run`](/tricks/concepts/upstream/) instead.
+An experiment or branch name means its committed tip. `working` and `head` are the checkout you run `diff` in: your main checkout, or, inside an experiment's worktree, the experiment. So `tricks diff <skill>` run inside the worktree shows the experiment's uncommitted changes. `diff` doesn't compare with upstream: it points you to [`outdated --diff` and `update --dry-run`](/tricks/concepts/upstream/) instead.
 
 ## Merge it back
 

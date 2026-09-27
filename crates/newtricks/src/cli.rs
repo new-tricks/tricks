@@ -599,7 +599,10 @@ fn print_links(r: &crate::links::LinkReport) {
         let from = l
             .source
             .as_deref()
-            .map(|src| format!(" from {}", crate::links::describe(l.branch.as_deref(), l.pinned, src, l.commit.as_deref())))
+            .map(|src| {
+                let copy = l.placements.iter().all(|(_, _, m)| m == "copy");
+                format!(" from {}", crate::links::describe(l.branch.as_deref(), l.pinned, src, l.commit.as_deref(), copy))
+            })
             .unwrap_or_default();
         println!("{} {} into {into}{from}", if l.trial { "trying" } else { "linked" }, l.name);
         for (a, p, m) in &l.placements {

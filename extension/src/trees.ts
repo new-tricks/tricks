@@ -147,12 +147,14 @@ export function linkSkillName(l: LinkInfo): string {
 
 /**
  * What a source repo skill's link deploys, as the CLI shows it: `main (working tree, live)`,
- * `experiment/pdf/terse (worktree, live, pinned)`, `v1.2.0 @ 3f2a1c9 (snapshot, pinned)`.
+ * `experiment/pdf/terse (worktree, live, pinned)`, `v1.2.0 @ 3f2a1c9 (snapshot, pinned)`; a copy
+ * says `copy` instead of `live` (it is refreshed only when the link is placed again).
  */
 export function linkBranch(l: LinkInfo): string {
   if (!l.source) return "";
   const b = l.branch ?? "detached";
-  const kind = l.source === "working-tree" ? ["working tree", "live"] : l.source === "worktree" ? ["worktree", "live"] : ["snapshot"];
+  const live = l.mode === "copy" ? "copy" : "live";
+  const kind = l.source === "working-tree" ? ["working tree", live] : l.source === "worktree" ? ["worktree", live] : ["snapshot"];
   const notes = [...kind, l.pinned ? "pinned" : ""].filter(Boolean);
   const at = l.source === "snapshot" && l.commit ? ` @ ${l.commit.slice(0, 7)}` : "";
   return `${b}${at}${notes.length ? ` (${notes.join(", ")})` : ""}`;

@@ -188,7 +188,7 @@ restored original ~/code/my-app/.claude/skills/changelog-writer
 | Symlink | A link to a checkout (your main checkout or a worktree) or a store entry | The default where the agent follows links |
 | Copy | A physical copy, written to a temporary directory and swapped into place | With `--copy`, and automatically for agents or platforms that can't follow links: always on Windows, always for GitHub Copilot. See [Agents](/tricks/concepts/agents/#link-or-copy) |
 
-A copy of a checkout doesn't update when you edit. Run `tricks link` again to refresh it. When an agent gets a copy of a live target, `link` warns you:
+A copy of a checkout doesn't update when you edit. Run `tricks link` again to refresh it. `list --links` labels such a link `copy` rather than `live`, for example `main (working tree, copy)`. When an agent gets a copy of a live target, `link` warns you:
 
 ```text
 warning: some selected agents cannot follow links here; they get a copy, so live edits will not show until you re-link

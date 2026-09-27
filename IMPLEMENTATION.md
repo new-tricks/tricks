@@ -1,4 +1,4 @@
-# New Tricks v0.7.0 — implementation notes
+# New Tricks v0.7.1: implementation notes
 
 Status of the implementation of [SPEC.md](SPEC.md), what was verified and how, the decisions made while building it (for review), and known gaps.
 
@@ -110,6 +110,7 @@ Core modules: `id` (grammar, URL normalization), `resolve` (refs, `@latest`, nam
     - `[settings] agents` is detected on first run (directories in the home, a VS Code `github.copilot*` extension, binaries on `PATH`; `["claude"]` if none). User-scope links go into the fewest directories that reach every selected agent (`agents::cover_user_scope`); agents named with `--agents` are always placed; project scope is unchanged.
     - "User scope" replaces "user level" in help, messages and docs; `--global` stays.
     - `search --sort`, `--min-installs`, `--min-stars`, `--facets` (per-catalog categories, not unified). `create`/`vendor -b <branch>` switch (or create) a branch first.
+53. **0.7.1 fixes** (from the 0.6.1 review, carried over to 0.7). `update` exits 1 when a skill fails or (without `--dry-run`) stops on conflicts. Inside an experiment's worktree (or any other checkout of the source repo), `diff`'s `working` and `head` are that checkout's. Copies are labelled `copy`, not `live`. Published provenance (`PROVENANCE.md`, the `Tricks-Source:` trailer) names the source repo by its `origin` remote with credentials removed, else `local:<folder>`, never a local path. The extension's `tricks.toml` schema is checked against the config structs by a unit test. Superseded by 0.7 and not carried over: finishing a conflicted branch `merge` on the next command (`experiment merge` is run again instead), `use --reset`, and the old `edit` wording in the extension.
 
 ## Known gaps
 

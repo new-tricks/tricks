@@ -103,7 +103,7 @@ Per-agent entries use the agent IDs from the table above.
 [`tricks doctor`](/tricks/reference/commands/doctor/) reports each agent's directories, whether the user scope directory exists yet, the mode links into the store get on this machine, and the agent version the integration was tested against:
 
 ```text
-New Tricks 0.7.0
+New Tricks 0.7.1
   ✓ git                      git version 2.55.0
   ✓ gh                       GitHub CLI found
   ✗ github.com credentials   anonymous: public sources only, 60 API requests/hour, no GitHub code search. Run `gh auth login`.

@@ -177,7 +177,8 @@ fn overlapping_change_conflicts_then_continue_or_abort() {
     git(&up, &["tag", "v1.1.0"]);
     set_interval_zero(&s);
     let lock_before = read(&ws.join("tricks.lock"));
-    let r = s.json_in(&ws, &["update"]);
+    // Stopping on conflicts exits non-zero, so scripts notice.
+    let r = s.json_any_in(&ws, &["update"]);
     assert_eq!(r["items"][0]["state"], "conflicts", "{r}");
     assert!(read(&p).contains("<<<<<<<"));
     assert_eq!(read(&ws.join("tricks.lock")), lock_before, "base must not move while conflicted");
@@ -191,7 +192,7 @@ fn overlapping_change_conflicts_then_continue_or_abort() {
     s.ok_in(&ws, &["update", "--abort"]);
     assert!(read(&p).contains("Keep it VERY short.") && !read(&p).contains("<<<<<<<"));
     // Redo and resolve.
-    s.ok_in(&ws, &["update"]);
+    let _ = s.cmd(&ws, &["update"]);
     let resolved = read(&p)
         .lines()
         .filter(|l| !l.starts_with("<<<<<<<") && !l.starts_with("=======") && !l.starts_with(">>>>>>>") && !l.contains("Keep it brief."))
@@ -266,7 +267,11 @@ fn lint_blocks_publish_and_publish_generates_ecosystem_files() {
     assert!(read(&target.join("PROVENANCE.md")).contains("github.com/acme/skills//skills/hello"));
     assert!(read(&target.join("CHANGELOG.md")).contains("## v0.1.0"));
     let msg = git(&target, &["log", "-1", "--format=%B"]);
-    assert!(msg.contains("Tricks-Source:"), "{msg}");
+    assert!(msg.contains("Tricks-Source: local:my-skills@"), "a source repo without a remote is named, not located: {msg}");
+    let root = ws.canonicalize().unwrap();
+    for published in [read(&target.join("PROVENANCE.md")), msg.clone()] {
+        assert!(!published.contains(root.to_str().unwrap()) && !published.contains(ws.to_str().unwrap()), "local path leaked: {published}");
+    }
     assert_eq!(git(&remote, &["tag", "--list"]), "v0.1.0");
 
     // Re-publish after deselecting a skill: removes it, keeps hand-added files.
@@ -405,6 +410,10 @@ fn experiments_and_what_links_deploy() {
     edit(&path.join("SKILL.md"), "## Instructions", "## Instructions (terse)");
     assert!(read(&pinned.join("SKILL.md")).contains("(terse)"), "live, uncommitted");
     assert!(!read(&deployed.join("SKILL.md")).contains("(terse)"));
+    // Inside the experiment, `diff`'s `working` and `head` are the experiment's.
+    let d = s.ok_in(&path, &["diff", "greeter"]);
+    assert!(d.contains("+## Instructions (terse)"), "{d}");
+    assert!(s.ok_in(&ws, &["diff", "greeter"]).contains("no differences"), "the main checkout is unchanged");
     let links = s.json_in(&ws, &["list", "--links"]);
     let by_scope =
         |links: &serde_json::Value, scope: &str| links["links"].as_array().unwrap().iter().find(|x| x["scope"] == scope).cloned().unwrap();
@@ -464,6 +473,12 @@ fn experiments_and_what_links_deploy() {
     assert!(s.ok_in(&ws, &["list", "--links"]).contains(&format!("v1 @ {tip} (snapshot, pinned)")));
     let err = s.fail_in(&ws, &["link", "greeter@nope", "--to", app3.to_str().unwrap()]);
     assert!(err.contains("no experiment `greeter@nope`"), "{err}");
+
+    // Copies do not follow edits: they say `copy`, not `live`.
+    let app4 = s.project("app4");
+    let out = s.ok_in(&ws, &["link", "greeter", "--to", app4.to_str().unwrap(), "--agents", "claude", "--copy"]);
+    assert!(out.contains("from main (working tree, copy)"), "{out}");
+    assert!(s.ok_in(&ws, &["list", "--links"]).contains("main (working tree, copy)"));
 
     // `link greeter` (no ref) un-pins it.
     s.ok_in(&ws, &["link", "greeter", "--to", app.to_str().unwrap(), "--agents", "claude"]);
