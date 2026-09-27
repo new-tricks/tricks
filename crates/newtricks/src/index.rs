@@ -261,6 +261,72 @@ pub struct Filters {
     pub owner: Option<String>,
     pub no_scripts: bool,
     pub category: Option<String>,
+    pub min_installs: Option<i64>,
+    pub min_stars: Option<i64>,
+}
+
+/// Result order for `search --sort`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sort {
+    /// Text relevance weighted by trust, popularity and freshness.
+    #[default]
+    Relevance,
+    Installs,
+    Stars,
+    /// Most recently changed first.
+    Updated,
+    Name,
+}
+
+impl Sort {
+    pub fn parse(s: &str) -> Result<Sort> {
+        Ok(match s {
+            "relevance" | "" => Sort::Relevance,
+            "installs" => Sort::Installs,
+            "stars" => Sort::Stars,
+            "updated" => Sort::Updated,
+            "name" => Sort::Name,
+            other => anyhow::bail!("unknown sort `{other}` (relevance | installs | stars | updated | name)"),
+        })
+    }
+}
+
+/// How the matches of a search spread over each facet: (value, count), most common first.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Facets {
+    pub categories: Vec<(String, usize)>,
+    pub catalogs: Vec<(String, usize)>,
+    pub owners: Vec<(String, usize)>,
+    pub license: Vec<(String, usize)>,
+    pub trust: Vec<(String, usize)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchOutcome {
+    pub results: Vec<SearchResult>,
+    /// Matching skills before `limit` (identical copies counted once).
+    pub total: usize,
+    pub facets: Facets,
+}
+
+fn tally<'a>(values: impl Iterator<Item = &'a str>) -> Vec<(String, usize)> {
+    let mut m: BTreeMap<String, usize> = BTreeMap::new();
+    for v in values {
+        *m.entry(v.to_string()).or_default() += 1;
+    }
+    let mut v: Vec<(String, usize)> = m.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v
+}
+
+fn facets_of(results: &[SearchResult]) -> Facets {
+    Facets {
+        categories: tally(results.iter().flat_map(|r| r.categories.iter().map(|c| c.as_str()))),
+        catalogs: tally(results.iter().flat_map(|r| r.listed_in.iter().map(|c| c.as_str()))),
+        owners: tally(results.iter().map(|r| r.source.split('/').nth(1).unwrap_or(&r.source))),
+        license: tally(results.iter().map(|r| r.license_class.as_str())),
+        trust: tally(results.iter().map(|r| r.trust.as_str())),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -344,6 +410,11 @@ pub fn linked_ids(ctx: &Ctx) -> BTreeSet<String> {
 }
 
 pub fn search(ctx: &Ctx, query: &str, f: &Filters, limit: usize) -> Result<Vec<SearchResult>> {
+    Ok(search_full(ctx, query, f, Sort::Relevance, limit)?.results)
+}
+
+/// Search with an order, and the facets of every match (before `limit`).
+pub fn search_full(ctx: &Ctx, query: &str, f: &Filters, sort: Sort, limit: usize) -> Result<SearchOutcome> {
     let identity = crate::catalogs::cached_identity(ctx, "github.com");
     let starred = crate::catalogs::cached_starred(ctx, "github.com");
     let linked: BTreeSet<String> = linked_ids(ctx);
@@ -513,6 +584,9 @@ pub fn search(ctx: &Ctx, query: &str, f: &Filters, limit: usize) -> Result<Vec<S
         if f.no_scripts && has_scripts {
             continue;
         }
+        if f.min_stars.is_some_and(|m| stars_n.unwrap_or(0) < m) {
+            continue;
+        }
 
         let mut risk = Vec::new();
         if has_scripts {
@@ -595,8 +669,21 @@ pub fn search(ctx: &Ctx, query: &str, f: &Filters, limit: usize) -> Result<Vec<S
         }
         grouped.push(r);
     }
+    // Installs are known after grouping (copies pool their listings).
+    if let Some(m) = f.min_installs {
+        grouped.retain(|r| r.installs.unwrap_or(0) >= m);
+    }
+    match sort {
+        Sort::Relevance => {}
+        Sort::Installs => grouped.sort_by_key(|r| std::cmp::Reverse(r.installs.unwrap_or(-1))),
+        Sort::Stars => grouped.sort_by_key(|r| std::cmp::Reverse(r.stars.unwrap_or(-1))),
+        Sort::Updated => grouped.sort_by_key(|r| std::cmp::Reverse(r.updated_at.unwrap_or(0))),
+        Sort::Name => grouped.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id))),
+    }
+    let total = grouped.len();
+    let facets = facets_of(&grouped);
     grouped.truncate(limit);
-    Ok(grouped)
+    Ok(SearchOutcome { results: grouped, total, facets })
 }
 
 pub fn license_class_label(c: &str) -> &str {

@@ -3,13 +3,12 @@ title: Configuration
 description: Every file, key and environment variable New Tricks reads, with defaults and complete annotated examples.
 ---
 
-New Tricks reads four files: the source repo manifest `tricks.toml`, its generated `tricks.lock`, the machine-local `tricks.work.toml`, and your user config. All are TOML. Only the keys on this page are read; New Tricks ignores anything else.
+New Tricks reads three files: the source repo manifest `tricks.toml`, its generated `tricks.lock`, and your user config. All are TOML. Only the keys on this page are read; New Tricks ignores anything else.
 
 | File | Where | Committed | Written by |
 |---|---|---|---|
-| [`tricks.toml`](#source-repo-manifest-trickstoml) | Source repo root | Yes | You, `init`, `create`, `vendor`, `remove`, `use` |
+| [`tricks.toml`](#source-repo-manifest-trickstoml) | Source repo root | Yes | You, `init`, `create`, `vendor`, `remove` |
 | [`tricks.lock`](#lock-file-trickslock) | Source repo root | Yes | New Tricks only |
-| [`tricks.work.toml`](#local-overrides-tricksworktoml) | Source repo root | No (git-ignored) | `use --local` |
 | [User config](#user-config) | `~/.config/newtricks/tricks.toml` | No | You, first run, `init`, `catalog` |
 
 When New Tricks edits `tricks.toml` or the user config, it keeps your comments and formatting.
@@ -35,7 +34,6 @@ One table per skill. The table key is the skill's name in the source repo, which
 | `upstream` | string | None (an original) | Canonical ID of the upstream skill, `host/owner/repo//path`, or a catalog-hosted ID such as `clawhub.ai/<owner>/skills//<slug>`. Set by `vendor`. See [Upstream tracking](/tricks/concepts/upstream/). |
 | `track` | string | `"latest"` | What `outdated` and `update` compare against: `"latest"` (the highest semver tag, else the default branch), a version such as `"v1.2.0"` (that tag), or a branch name. `vendor` writes the branch when you vendor at `@<branch>`, else `"latest"`. |
 | `update` | string | `"review"` | Update policy for a vendored skill. `review`: upstream changes are reported by `list` and `outdated` and merged by `update`. `pinned`: stays on its base; `update` with no skill skips it, and `outdated` notes the new version. `paused`: not checked; `outdated` and `update` skip it unless you name it. |
-| `use` | string | None (the current checkout) | Branch whose version this skill's links deploy by default. Set by [`use`](/tricks/reference/commands/use/) and cleared by `use --reset`. A value in `tricks.work.toml` takes precedence. See [Branch experiments](/tricks/concepts/branch-experiments/). |
 | `license-override` | inline table | None | `{ justification = "…" }`: allows publishing a vendored skill whose licence would otherwise block it; the licence gate then reports it as allowed by override, as a warning. Record why you have permission in the justification. A blocked licence gate prints the exact snippet to add. See [Publishing](/tricks/concepts/publishing/). |
 
 ### `[lint]`
@@ -73,7 +71,6 @@ agents = ["claude", "codex"]          # default: settings.agents from the user c
 
 [skills.changelog-writer]             # an original: no upstream
 path = "skills/changelog-writer"
-use  = "terse"                        # links deploy branch `terse` by default
 
 [skills.skill-creator]                # a vendored skill
 path     = "skills/skill-creator"
@@ -133,35 +130,22 @@ source = "skill-file"
 confidence = 1.0
 ```
 
-## Local overrides: `tricks.work.toml`
-
-Machine-local and git-ignored (`init` adds it to `.gitignore`), so personal experiments in a shared source repo never change the committed manifest.
-
-| Key | Type | Meaning |
-|---|---|---|
-| `use.<skill>` | string | Branch whose version this skill's links deploy on this machine. Written by `use <skill>@<branch> --local`; overrides `use` in `tricks.toml`. |
-
-```toml
-[use]
-changelog-writer = "terse"
-```
-
 ## User config
 
-Machine-level settings, the catalogs `search` draws on, and your registered source repos. It holds no skills: New Tricks does not install skills on your machine.
+Settings for your machine, the catalogs `search` draws on, and your registered source repos. It holds no skills: New Tricks does not install skills on your machine.
 
 | Platform | Path |
 |---|---|
 | macOS, Linux | `$XDG_CONFIG_HOME/newtricks/tricks.toml`, default `~/.config/newtricks/tricks.toml` |
 | Windows | `%APPDATA%\newtricks\tricks.toml` |
 
-The first run writes this file with the default settings and the recommended catalogs, so nothing search uses is hidden. An existing file is never rewritten.
+The first run writes this file with the default settings, the agents it finds on your machine and the recommended catalogs, so nothing search uses is hidden. An existing file is never rewritten.
 
 ### `[settings]`
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `agents` | array of strings | `["claude"]` | Agents to link and try skills for when neither the command (`--agents`) nor the source repo (`[source-repo] agents`) says: `claude`, `codex`, `cursor`, `copilot`, or `"all"`. |
+| `agents` | array of strings | The agents found on first run, else `["claude"]` | Agents to link and try skills for when neither the command (`--agents`) nor the source repo (`[source-repo] agents`) says: `claude`, `codex`, `cursor`, `copilot`, or `"all"`. The first run lists the agents it finds: their directories in your home (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.copilot`), a Copilot extension in VS Code, or their commands on `PATH`. See [Agents](/tricks/concepts/agents/). |
 | `fetch_interval` | string | `"24h"` | How long fetched catalogs and upstreams count as fresh. A number and a unit: `s`, `m`, `h` or `d`, such as `"30m"`. |
 | `live` | array of strings | `["skills.sh", "tessl", "clawhub", "github"]` | Live-query catalogs asked on every search. `[]` turns them all off; `search --no-live` skips them for one search. |
 
@@ -185,7 +169,7 @@ See [Discovery](/tricks/concepts/discovery/).
 # ~/.config/newtricks/tricks.toml
 
 [settings]
-agents = ["claude", "codex"]          # default: ["claude"]
+agents = ["claude", "codex"]          # default: the agents found on first run, else ["claude"]
 fetch_interval = "24h"                # s | m | h | d
 live = ["skills.sh", "tessl", "clawhub", "github"]   # [] for none
 
@@ -208,7 +192,7 @@ team      = "~/code/acme-skills"
 
 | Variable | Meaning |
 |---|---|
-| `TRICKS_HOME` | The home directory New Tricks uses: user-level agent directories (`~/.claude/skills` and so on), `~` in config paths, and the default config and data locations. Default: your home directory. |
+| `TRICKS_HOME` | The home directory New Tricks uses: user scope agent directories (`~/.claude/skills` and so on), agent detection on first run, `~` in config paths, and the default config and data locations. Default: your home directory. |
 | `TRICKS_CONFIG_DIR` | Directory holding the user config `tricks.toml`. |
 | `TRICKS_DATA_DIR` | Data directory (see [below](#data-directory)). |
 | `XDG_CONFIG_HOME` | On macOS and Linux, the user config lives in `$XDG_CONFIG_HOME/newtricks` when set. |
@@ -221,7 +205,7 @@ team      = "~/code/acme-skills"
 
 For hermetic tests and CI, New Tricks also reads `TRICKS_HOST_MAP` (map a host to a local directory of repositories, `github.com=/path/to/fixtures`, where `<dir>/<owner>/<repo>` are git repositories), `TRICKS_NO_API` (index GitHub repositories with git instead of the GitHub API), `TRICKS_SKILLS_SH_URL`, `TRICKS_TESSL_URL` and `TRICKS_CLAWHUB_URL` (catalog endpoints), and `TRICKS_IDENTITY` and `TRICKS_STARRED` (a fixed GitHub identity and starred list for the trust facet).
 
-New Tricks sets two variables itself: `TRICKS_EDITING=<skill>@<branch>` in the shell that `edit --shell` opens, and `TRICKS_VSCODE_TOKEN` when the VS Code extension passes its GitHub session to the binary.
+New Tricks sets two variables itself: `TRICKS_EXPERIMENT=<skill>@<name>` in the shell that `experiment shell` (or `experiment start --shell`) opens, and `TRICKS_VSCODE_TOKEN` when the VS Code extension passes its GitHub session to the binary.
 
 ## Data directory
 
@@ -235,7 +219,7 @@ Caches and state live in a platform-native, non-hidden location where the platfo
 
 | Inside | What |
 |---|---|
-| `store/` | Read-only, content-addressed skill revisions: trials, pinned-branch snapshots, catalog-hosted bases. A cache; `unlink` prunes it. |
+| `store/` | Read-only, content-addressed skill revisions: trials, snapshots for links pinned to a tag or commit, catalog-hosted bases. A cache; `unlink` prunes it. |
 | `repos/<host>/<owner>/<repo>/` | Fetch-only mirrors of upstream repositories. Never pushed. |
 | `publish/` | New Tricks' own clones of publish targets, reset to the remote before every publish. |
 | `backups/` | Skills moved aside by `link --shadow`, restored on unlink. |

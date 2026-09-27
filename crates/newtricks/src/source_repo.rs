@@ -1,8 +1,8 @@
 //! SourceRepo authoring (spec §10): vendoring with a recorded base, upstream merges left
-//! uncommitted for review, branch experiments via worktrees, and dev deployments.
+//! uncommitted for review, experiments on branches in worktrees, and what links deploy.
 
 use crate::agents::{self, Agent};
-use crate::config::{self, Policy, RepoLocked, RepoSkill, SourceRepoLock, SourceRepoManifest, WorkFile};
+use crate::config::{self, Policy, RepoLocked, RepoSkill, SourceRepoLock, SourceRepoManifest};
 use crate::ctx::Ctx;
 use crate::deploy::{self, PlaceRequest, Scope};
 use crate::git::{self, Mirror, git};
@@ -430,10 +430,7 @@ pub fn remove(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<RemoveReport> {
         deploy::remove_placement(ctx, &p)?;
         unlinked.push(p.path);
     }
-    ctx.state.conn.execute(
-        "DELETE FROM meta WHERE key IN (?1, ?2, ?3)",
-        params![editing_key(ws, name), snapshot_key(ws, name), hosted_up_key(ws, name)],
-    )?;
+    ctx.state.conn.execute("DELETE FROM meta WHERE key=?1", params![hosted_up_key(ws, name)])?;
     let dir = ws.root.join(&rel);
     if dir.exists() {
         deploy::remove_path(&dir)?;
@@ -822,8 +819,6 @@ fn update_one(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<UpdateItem> {
         });
     }
     let risk = RiskReport::scan_dir(&sd.up_dir).diff_from(&RiskReport::scan_dir(&sd.base_dir));
-    // Keep agents on the committed version while the working tree is being merged.
-    freeze_dev_placements(ctx, ws, name)?;
     // Back up C, then merge B→U into it.
     let backup = ctx.paths.backups().join(format!("merge-{}-{name}-{}", ws.key(), now()));
     store::copy_dir(&dir, &backup)?;
@@ -853,7 +848,7 @@ fn update_one(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<UpdateItem> {
         Ok(UpdateItem {
             outcome: Some(outcome),
             message: Some(
-                "merged into the working tree (uncommitted); review with `git diff` and commit — agents keep the previous version until then"
+                "merged into the working tree (uncommitted); review with `git diff` and commit (links to the main checkout already load it)"
                     .into(),
             ),
             ..item
@@ -955,71 +950,36 @@ fn abort_update(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<UpdateItem> {
     store::copy_dir(&backup, &dir)?;
     let _ = store::remove_dir_force(&backup);
     ctx.state.conn.execute("DELETE FROM merges WHERE workspace=?1 AND skill=?2", params![ws.root.to_string_lossy(), name])?;
-    ctx.state.conn.execute("DELETE FROM meta WHERE key=?1", [snapshot_key(ws, name)])?;
     redeploy(ctx, ws, name)?;
     Ok(UpdateItem { message: Some("restored your version".into()), ..UpdateItem::new(name, "aborted") })
 }
 
-// ---------------------------------------------------------------- variants, edit, commit
+// ---------------------------------------------------------------- what links deploy
 
-/// Active variant (branch) for a skill: local override, then manifest `use`.
-pub fn active_variant(ws: &SourceRepo, name: &str) -> Result<Option<String>> {
-    let wf = WorkFile::load(&ws.root)?;
-    if let Some(b) = wf.use_branch.get(name) {
-        return Ok(Some(b.clone()).filter(|b| b != "default"));
-    }
-    Ok(ws.manifest.skills.get(name).and_then(|s| s.use_branch.clone()))
-}
-
-fn editing_key(ws: &SourceRepo, name: &str) -> String {
-    format!("editing:{}:{name}", ws.root.display())
-}
-
-/// The worktree of an experiment branch: `<repo>/.tricks/work/<branch>` (git-ignored), so
-/// it sits next to the skills in the editor and inside the repo agents may write to.
-fn worktree_path(_ctx: &Ctx, ws: &SourceRepo, branch: &str) -> PathBuf {
+/// The worktree New Tricks checks a branch out into: `<repo>/.tricks/work/<branch>`
+/// (git-ignored), so it sits next to the skills in the editor and inside the repo agents
+/// may write to.
+fn worktree_path(ws: &SourceRepo, branch: &str) -> PathBuf {
     ws.root.join(config::WORK_DIR).join(branch.replace('/', "--"))
 }
 
-/// Make sure `.gitignore` ignores the work file and the experiment worktrees.
+/// Make sure `.gitignore` ignores the worktrees.
 fn ensure_ignored(root: &Path) -> Result<()> {
     let gi = root.join(".gitignore");
     let mut g = std::fs::read_to_string(&gi).unwrap_or_default();
-    let mut changed = false;
-    for entry in [config::WORK_FILE, "/.tricks/"] {
-        if !g.lines().any(|l| l.trim() == entry || l.trim() == entry.trim_start_matches('/')) {
-            if !g.is_empty() && !g.ends_with('\n') {
-                g.push('\n');
-            }
-            g.push_str(&format!("{entry}\n"));
-            changed = true;
+    let entry = "/.tricks/";
+    if !g.lines().any(|l| l.trim() == entry || l.trim() == entry.trim_start_matches('/')) {
+        if !g.is_empty() && !g.ends_with('\n') {
+            g.push('\n');
         }
-    }
-    if changed {
+        g.push_str(&format!("{entry}\n"));
         std::fs::write(&gi, g)?;
     }
     Ok(())
 }
 
-fn snapshot_key(ws: &SourceRepo, name: &str) -> String {
-    format!("snapshot:{}:{name}", ws.root.display())
-}
-
 fn local_mirror(ws: &SourceRepo) -> Mirror {
     Mirror { source: crate::id::SourceId::new("local", &ws.name), dir: ws.root.clone() }
-}
-
-/// Before an upstream merge rewrites the working tree, pin dev deployments to the
-/// committed version so agents keep seeing it until the merge result is committed.
-fn freeze_dev_placements(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<()> {
-    let key = ws.skill_key(name);
-    if ctx.state.placements("WHERE skill=?1", &[&key])?.is_empty() {
-        return Ok(());
-    }
-    let head = git::head_commit(&ws.root)?;
-    ctx.state.meta_set(&snapshot_key(ws, name), &head)?;
-    redeploy(ctx, ws, name)?;
-    Ok(())
 }
 
 /// What a link of a source repo skill deploys.
@@ -1030,72 +990,139 @@ pub struct Deployed {
     pub commit: Option<String>,
     /// A checkout (edits show immediately) rather than a snapshot in the store.
     pub live: bool,
-    /// The branch it comes from (`None` on a detached HEAD).
+    /// The branch it comes from (`None` on a detached HEAD), or the commit or tag a
+    /// snapshot was taken at.
     pub branch: Option<String>,
 }
 
-/// What a link of `name` deploys: with a `pin`, that branch; otherwise the skill's default
-/// (its `use` variant, else the working tree).
-pub fn deploy_source(ctx: &Ctx, ws: &SourceRepo, name: &str, pin: Option<&str>) -> Result<Deployed> {
-    let branch = match pin {
-        Some(b) => Some(b.to_string()),
-        None => active_variant(ws, name)?,
-    };
-    match branch {
-        Some(b) if git::current_branch(&ws.root).as_deref() != Some(b.as_str()) => deploy_branch(ctx, ws, name, &b),
-        _ => deploy_working_tree(ctx, ws, name),
+enum Pinned {
+    Branch(String),
+    Commit(String),
+}
+
+/// What a link pinned to `pin` refers to: a branch (by its full name) or a commit or tag.
+fn resolve_pin(ws: &SourceRepo, pin: &str) -> Result<Pinned> {
+    if git::branch_exists(&ws.root, pin) {
+        return Ok(Pinned::Branch(pin.to_string()));
+    }
+    match git(&ws.root, &["rev-parse", "--verify", "--quiet", &format!("{pin}^{{commit}}")]) {
+        Ok(c) if !c.is_empty() => Ok(Pinned::Commit(c)),
+        _ => bail!("no branch, tag or commit `{pin}` in source repo {}", ws.name),
     }
 }
 
-/// The skill in the source repo's checkout — or, while an upstream update has rewritten it
-/// and is not yet committed, the last committed version.
-fn deploy_working_tree(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<Deployed> {
-    let rel = ws.skill(name)?.path.clone();
-    let branch = git::current_branch(&ws.root);
-    if let Some(snap) = ctx.state.meta_get(&snapshot_key(ws, name))? {
-        let clean = git(&ws.root, &["status", "--porcelain", "--", &rel]).map(|o| o.trim().is_empty()).unwrap_or(false);
-        let merging = merge_state(ctx, ws, name)?.is_some();
-        let moved = git::head_commit(&ws.root).map(|h| h != snap).unwrap_or(false);
-        if clean && !merging && moved {
-            ctx.state.conn.execute("DELETE FROM meta WHERE key=?1", [snapshot_key(ws, name)])?;
-        } else {
-            let m = local_mirror(ws);
-            if let Some(tree) = m.tree_at(&snap, &rel) {
-                let dir = store::from_mirror(ctx, &m, &snap, &rel, &tree)?;
-                return Ok(Deployed { dir, tree: Some(tree), commit: Some(snap), live: false, branch });
+/// What someone wrote after `<skill>@`: an experiment of the skill, a branch, or a tag
+/// or commit. Branches are recorded by their full name, so a pin keeps meaning the same
+/// branch when other branches appear later. `heads/<branch>` names a branch that shares
+/// its name with an experiment.
+fn resolve_ref_input(ctx: &Ctx, ws: &SourceRepo, skill: &str, r: &str) -> Result<String> {
+    if let Some(b) = r.strip_prefix("heads/") {
+        if !git::branch_exists(&ws.root, b) {
+            bail!("no branch `{b}` in source repo {}", ws.name);
+        }
+        return Ok(b.to_string());
+    }
+    let exp = experiment_branch(skill, r);
+    match (git::branch_exists(&ws.root, &exp), git::branch_exists(&ws.root, r)) {
+        (true, plain) => {
+            if plain {
+                ctx.ui.warn(&format!("`{skill}@{r}` is the experiment {exp}; write `{skill}@heads/{r}` for the branch {r}"));
             }
+            Ok(exp)
+        }
+        (false, true) => Ok(r.to_string()),
+        (false, false) => {
+            resolve_pin(ws, r)
+                .map_err(|_| anyhow::anyhow!("no experiment `{skill}@{r}`, branch, tag or commit `{r}` in source repo {}", ws.name))?;
+            Ok(r.to_string())
         }
     }
-    Ok(Deployed { dir: ws.root.join(&rel), tree: None, commit: None, live: true, branch })
 }
 
-/// The skill on another branch: its draft while `tricks edit` has it checked out, else a
-/// snapshot of the branch tip (refreshed when the branch moves).
-fn deploy_branch(ctx: &Ctx, ws: &SourceRepo, name: &str, branch: &str) -> Result<Deployed> {
+/// What a link of `name` deploys. Without a pin: the skill in the source repo's main
+/// checkout, as it is (whatever branch is checked out, uncommitted edits included). A
+/// branch pin: that branch's checkout, live. A commit or tag pin: a frozen snapshot.
+pub fn deploy_source(ctx: &Ctx, ws: &SourceRepo, name: &str, pin: Option<&str>) -> Result<Deployed> {
     let rel = ws.skill(name)?.path.clone();
-    if editing_branch(ctx, ws, name)?.as_deref() == Some(branch) {
-        let d = worktree_path(ctx, ws, branch).join(&rel);
-        if d.exists() {
-            return Ok(Deployed { dir: d, tree: None, commit: None, live: true, branch: Some(branch.into()) });
+    let Some(pin) = pin else {
+        return Ok(Deployed { dir: ws.root.join(&rel), tree: None, commit: None, live: true, branch: git::current_branch(&ws.root) });
+    };
+    match resolve_pin(ws, pin)? {
+        Pinned::Branch(b) => {
+            let dir = branch_checkout(ctx, ws, &b)?.join(&rel);
+            if !dir.exists() {
+                bail!("branch `{b}` has no {rel}");
+            }
+            Ok(Deployed { dir, tree: None, commit: None, live: true, branch: Some(b) })
+        }
+        Pinned::Commit(c) => {
+            let m = local_mirror(ws);
+            let tree = m.tree_at(&c, &rel).with_context(|| format!("`{pin}` has no {rel}"))?;
+            let dir = store::from_mirror(ctx, &m, &c, &rel, &tree)?;
+            Ok(Deployed { dir, tree: Some(tree), commit: Some(c), live: false, branch: Some(pin.to_string()) })
         }
     }
-    let commit = git(&ws.root, &["rev-parse", "--verify", "--quiet", &format!("{branch}^{{commit}}")])
-        .ok()
-        .filter(|c| !c.is_empty())
-        .with_context(|| format!("no branch `{branch}` in source repo {}", ws.name))?;
-    let m = local_mirror(ws);
-    let tree = m.tree_at(&commit, &rel).with_context(|| format!("branch `{branch}` has no {rel}"))?;
-    let dir = store::from_mirror(ctx, &m, &commit, &rel, &tree)?;
-    Ok(Deployed { dir, tree: Some(tree), commit: Some(commit), live: false, branch: Some(branch.into()) })
 }
 
-/// The branch `tricks edit` has checked out for a skill, if any.
-fn editing_branch(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<Option<String>> {
-    Ok(ctx.state.meta_get(&editing_key(ws, name))?.filter(|b| !b.is_empty()))
+fn link_worktree_key(wt: &Path) -> String {
+    format!("link-worktree:{}", wt.display())
+}
+
+/// A checkout of `branch`: wherever it is checked out already (the main checkout, an
+/// experiment's worktree, one of your own), else a new worktree in `.tricks/work` that
+/// goes away with the last link that needs it.
+fn branch_checkout(ctx: &Ctx, ws: &SourceRepo, branch: &str) -> Result<PathBuf> {
+    if let Some(p) = git::checkout_of(&ws.root, branch) {
+        return Ok(p);
+    }
+    let wt = worktree_path(ws, branch);
+    if wt.exists() {
+        let _ = git(&ws.root, &["worktree", "prune"]);
+        if wt.exists() {
+            bail!("{} exists but is not a checkout of `{branch}`; move it away", wt.display());
+        }
+    }
+    ensure_ignored(&ws.root)?;
+    std::fs::create_dir_all(wt.parent().unwrap())?;
+    git::run(&ws.root, &["worktree", "add", "-q", &wt.to_string_lossy(), branch])?;
+    let wt = crate::paths::canon(&wt).unwrap_or(wt);
+    if !branch.starts_with(EXPERIMENT_PREFIX) {
+        ctx.state.meta_set(&link_worktree_key(&wt), &format!("{}\n{branch}", ws.root.display()))?;
+    }
+    Ok(wt)
+}
+
+/// Remove the worktrees made only so that links could deploy a branch, once no link
+/// uses them. A worktree with uncommitted changes is kept.
+pub fn prune_link_worktrees(ctx: &Ctx) -> Result<()> {
+    let rows: Vec<(String, String)> = {
+        let mut st = ctx.state.conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'link-worktree:%'")?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?
+    };
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let targets: Vec<PathBuf> =
+        ctx.state.placements("WHERE origin='source-repo'", &[])?.into_iter().map(|p| PathBuf::from(p.target)).collect();
+    for (key, value) in rows {
+        let wt = PathBuf::from(key.trim_start_matches("link-worktree:"));
+        let root = PathBuf::from(value.split('\n').next().unwrap_or_default());
+        if targets.iter().any(|t| t.starts_with(&wt)) {
+            continue;
+        }
+        if wt.exists() {
+            if !git::is_clean(&wt).unwrap_or(false) {
+                continue;
+            }
+            git::run(&root, &["worktree", "remove", &wt.to_string_lossy()])?;
+        }
+        ctx.state.conn.execute("DELETE FROM meta WHERE key=?1", [&key])?;
+    }
+    Ok(())
 }
 
 /// Place every skill-level link of a source repo skill for `agents_sel` in `scope`. A link
-/// already pinned to a branch there keeps its pin; new links follow the default.
+/// already pinned there keeps its pin; new links follow the main checkout.
 pub fn place_skill(
     ctx: &Ctx,
     ws: &SourceRepo,
@@ -1141,7 +1168,7 @@ pub fn place_skill(
 }
 
 /// Re-point every link of a source repo skill at what it should deploy now: its pinned
-/// branch, or the default (working tree, `use` variant, or merge snapshot).
+/// branch or commit, or the main checkout.
 pub fn redeploy(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<Vec<String>> {
     let key = ws.skill_key(name);
     let existing = ctx.state.placements("WHERE skill=?1", &[&key])?;
@@ -1153,7 +1180,7 @@ pub fn redeploy(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<Vec<String>> {
             let d = match deploy_source(ctx, ws, name, p.pin.as_deref()) {
                 Ok(d) => Some(d),
                 Err(e) => {
-                    ctx.ui.warn(&format!("links of {name} pinned to {}: {e:#}", p.pin.as_deref().unwrap_or("the default")));
+                    ctx.ui.warn(&format!("links of {name} pinned to {}: {e:#}", p.pin.as_deref().unwrap_or("the main checkout")));
                     None
                 }
             };
@@ -1182,60 +1209,59 @@ pub fn redeploy(ctx: &Ctx, ws: &SourceRepo, name: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Links of a skill pinned to `branch` (paths).
-fn pinned_to(ctx: &Ctx, ws: &SourceRepo, name: &str, branch: &str) -> Result<Vec<String>> {
+/// Links of a skill pinned to `pin` (paths).
+fn pinned_to(ctx: &Ctx, ws: &SourceRepo, name: &str, pin: &str) -> Result<Vec<String>> {
     Ok(ctx
         .state
-        .placements("WHERE skill=?1 AND pin=?2", &[&ws.skill_key(name), &branch])?
+        .placements("WHERE skill=?1 AND pin=?2", &[&ws.skill_key(name), &pin])?
         .into_iter()
         .map(|p| format!("{} ({})", p.path, p.mode))
         .collect())
 }
 
-/// Bring links up to date at startup: return them to the working tree once a merge they
-/// were frozen for has been committed (with plain `git commit`), and refresh snapshots of
-/// branches that have moved. Cheap: only skills with a merge snapshot or snapshot links.
+/// Bring links up to date at startup. Links that follow the main checkout show the branch
+/// it is on now; a pinned link is re-pointed when its branch moved to another checkout
+/// (for example, the main checkout switched away from it) or its tag moved. Worktrees
+/// that only links needed, and that no link needs any more, are removed.
 pub fn reconcile(ctx: &Ctx) -> Result<()> {
-    let Some(ws) = current(ctx)? else { return Ok(()) };
-    let head_branch = git::current_branch(&ws.root);
+    let Some(ws) = current(ctx)? else { return prune_link_worktrees(ctx) };
+    let head = git::current_branch(&ws.root);
+    ctx.state.conn.execute(
+        "UPDATE placements SET branch=?1 WHERE origin='source-repo' AND pin IS NULL AND skill LIKE ?2",
+        params![head, format!("ws:{}//%", ws.root.display())],
+    )?;
     for name in ws.manifest.skills.keys() {
-        if ctx.state.meta_get(&snapshot_key(&ws, name))?.is_some() {
-            redeploy(ctx, &ws, name)?;
-            continue;
-        }
-        let stale = ctx.state.placements("WHERE skill=?1 AND commit_sha IS NOT NULL", &[&ws.skill_key(name)])?.into_iter().any(|p| {
-            let branch = match p.pin.clone() {
-                Some(b) => Some(b),
-                None => active_variant(&ws, name).ok().flatten(),
-            };
-            match branch {
-                Some(b) if head_branch.as_deref() != Some(b.as_str()) => {
-                    git(&ws.root, &["rev-parse", "--verify", "--quiet", &format!("{b}^{{commit}}")]).ok().as_deref() != p.commit.as_deref()
-                }
-                // Snapshot, but the branch is now checked out: deploy the working tree.
-                Some(_) => true,
-                None => false,
-            }
+        let pinned = ctx.state.placements("WHERE skill=?1 AND pin IS NOT NULL", &[&ws.skill_key(name)])?;
+        let mut pins: Vec<String> = pinned.iter().filter_map(|p| p.pin.clone()).collect();
+        pins.sort();
+        pins.dedup();
+        let stale = pins.iter().any(|pin| match deploy_source(ctx, &ws, name, Some(pin)) {
+            Ok(d) => pinned
+                .iter()
+                .filter(|p| p.pin.as_deref() == Some(pin.as_str()))
+                .any(|p| Path::new(&p.target) != d.dir || p.commit != d.commit),
+            Err(_) => true,
         });
         if stale {
             redeploy(ctx, &ws, name)?;
         }
     }
-    Ok(())
+    prune_link_worktrees(ctx)
 }
 
-/// A source repo skill to link: `name` follows the skill's default, `name@branch` is
-/// pinned to that branch.
+/// A source repo skill to link: `name` follows the main checkout, `name@<ref>` is pinned
+/// to an experiment, branch, tag or commit.
 pub fn link_target_for_name(ctx: &Ctx, input: &str) -> Result<Option<LinkTarget>> {
     let Some(ws) = current(ctx)? else { return Ok(None) };
-    let (name, pin) = match input.split_once('@') {
+    let (name, r) = match input.split_once('@') {
         Some((n, b)) => (n, Some(b)),
         None => (input, None),
     };
     if !ws.manifest.skills.contains_key(name) {
         return Ok(None);
     }
-    let d = deploy_source(ctx, &ws, name, pin)?;
+    let pin = r.map(|r| resolve_ref_input(ctx, &ws, name, r)).transpose()?;
+    let d = deploy_source(ctx, &ws, name, pin.as_deref())?;
     Ok(Some(LinkTarget {
         skill: ws.skill_key(name),
         name: name.into(),
@@ -1244,92 +1270,140 @@ pub fn link_target_for_name(ctx: &Ctx, input: &str) -> Result<Option<LinkTarget>
         tree: d.tree,
         commit: d.commit,
         trial: false,
-        pin: pin.map(String::from),
+        pin,
         branch: d.branch,
     }))
 }
 
-#[derive(Debug, Serialize)]
-pub struct EditReport {
-    pub name: String,
-    pub branch: Option<String>,
-    pub path: String,
-    pub worktree: Option<String>,
-    pub placements: Vec<String>,
+// ---------------------------------------------------------------- experiments
+
+/// Experiments are branches named `experiment/<skill>/<name>`.
+pub const EXPERIMENT_PREFIX: &str = "experiment/";
+
+pub fn experiment_branch(skill: &str, name: &str) -> String {
+    format!("{EXPERIMENT_PREFIX}{skill}/{name}")
 }
 
-/// Default branch for `tricks edit <skill>`.
-pub fn draft_branch(name: &str) -> String {
-    format!("draft/{name}")
+/// `(skill, name)` of an experiment branch.
+pub fn parse_experiment_branch(branch: &str) -> Option<(String, String)> {
+    let (skill, name) = branch.strip_prefix(EXPERIMENT_PREFIX)?.split_once('/')?;
+    Some((skill.to_string(), name.to_string()))
 }
 
-/// `tricks edit <skill> [-b <branch>]`: start (or continue) an experiment on a branch,
-/// checked out in `.tricks/work/<branch>`. Links pinned to the branch
-/// (`tricks link <skill>@<branch>`) deploy the draft; other links are left alone.
-pub fn edit(ctx: &Ctx, name: &str, branch: Option<&str>) -> Result<EditReport> {
-    let ws = require(ctx)?;
-    if !ws.manifest.skills.contains_key(name) {
-        bail!("`{name}` is not a skill in source repo {}; bring it in first with `tricks vendor` or `tricks create`", ws.name);
-    }
-    // An explicit branch; else the experiment already under way; else draft/<skill>.
-    let b = match branch {
-        Some(b) => b.to_string(),
-        None => ctx.state.meta_get(&editing_key(&ws, name))?.filter(|b| !b.is_empty()).unwrap_or_else(|| draft_branch(name)),
+/// `<skill>@<name>`, or when omitted the experiment whose worktree holds the current
+/// directory.
+fn experiment_spec(ctx: &Ctx, ws: &SourceRepo, spec: Option<&str>) -> Result<(String, String)> {
+    let (skill, name) = match spec {
+        Some(s) => {
+            let (k, n) = s.split_once('@').with_context(|| format!("name the experiment as <skill>@<name>, for example `{s}@terse`"))?;
+            (k.to_string(), n.to_string())
+        }
+        None => git::current_branch(&ctx.opts.cwd)
+            .as_deref()
+            .and_then(parse_experiment_branch)
+            .context("name the experiment (<skill>@<name>), or run this inside its worktree")?,
     };
-    let rel = ws.skill(name)?.path.clone();
-    ensure_ignored(&ws.root)?;
-    let wt = worktree_path(ctx, &ws, &b);
-    if !wt.join(".git").exists() {
+    ws.skill(&skill)?;
+    Ok((skill, name))
+}
+
+fn pr_key(ws: &SourceRepo, branch: &str) -> String {
+    format!("experiment-pr:{}:{branch}", ws.root.display())
+}
+
+/// State of a pull request (`OPEN`, `MERGED`, `CLOSED`) from `gh`, when available.
+fn pr_state(ctx: &Ctx, ws: &SourceRepo, url: &str) -> Option<String> {
+    if ctx.opts.offline || std::env::var_os("TRICKS_NO_GH").is_some() {
+        return None;
+    }
+    git::echo(&ws.root, "gh", &["pr", "view", url, "--json", "state", "--jq", ".state"], 2);
+    let out = std::process::Command::new("gh")
+        .args(["pr", "view", url, "--json", "state", "--jq", ".state"])
+        .current_dir(&ws.root)
+        .output()
+        .ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
+}
+
+fn commits_ahead(ws: &SourceRepo, branch: &str) -> usize {
+    git(&ws.root, &["rev-list", "--count", &format!("HEAD..{branch}")]).ok().and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+#[derive(Debug, Serialize)]
+pub struct Experiment {
+    pub skill: String,
+    pub name: String,
+    pub branch: String,
+    /// The experiment's checkout, and the skill's folder in it.
+    pub worktree: Option<String>,
+    pub path: Option<String>,
+    /// Commits not yet on the branch the source repo is on.
+    pub ahead: usize,
+    pub uncommitted: bool,
+    /// Links pinned to the experiment.
+    pub links: Vec<String>,
+    pub pr: Option<String>,
+    /// OPEN | MERGED | CLOSED, when `gh` can tell.
+    pub pr_state: Option<String>,
+}
+
+fn experiment_info(ctx: &Ctx, ws: &SourceRepo, skill: &str, name: &str, with_pr_state: bool) -> Result<Experiment> {
+    let branch = experiment_branch(skill, name);
+    let rel = ws.skill(skill)?.path.clone();
+    let wt = git::checkout_of(&ws.root, &branch);
+    let pr = ctx.state.meta_get(&pr_key(ws, &branch))?;
+    Ok(Experiment {
+        skill: skill.into(),
+        name: name.into(),
+        path: wt.as_ref().map(|w| w.join(&rel).to_string_lossy().to_string()),
+        uncommitted: wt.as_ref().is_some_and(|w| !git::is_clean(w).unwrap_or(true)),
+        worktree: wt.map(|w| w.to_string_lossy().to_string()),
+        ahead: commits_ahead(ws, &branch),
+        links: pinned_to(ctx, ws, skill, &branch)?,
+        pr_state: pr.as_deref().filter(|_| with_pr_state).and_then(|u| pr_state(ctx, ws, u)),
+        pr,
+        branch,
+    })
+}
+
+/// Experiments in the source repo (of one skill, or all).
+pub fn experiments(ctx: &Ctx, ws: &SourceRepo, skill: Option<&str>, with_pr_state: bool) -> Result<Vec<Experiment>> {
+    let refs = git(&ws.root, &["for-each-ref", "--format=%(refname:short)", &format!("refs/heads/{EXPERIMENT_PREFIX}")])?;
+    let mut out = Vec::new();
+    for b in refs.lines() {
+        let Some((k, n)) = parse_experiment_branch(b) else { continue };
+        if skill.is_some_and(|s| s != k) || !ws.manifest.skills.contains_key(&k) {
+            continue;
+        }
+        out.push(experiment_info(ctx, ws, &k, &n, with_pr_state)?);
+    }
+    Ok(out)
+}
+
+/// `tricks experiment start <skill>@<name>`: branch `experiment/<skill>/<name>` off the
+/// current commit, checked out in `.tricks/work/`. Starting one that exists picks it up.
+pub fn experiment_start(ctx: &Ctx, spec: &str) -> Result<Experiment> {
+    let ws = require(ctx)?;
+    let (skill, name) = experiment_spec(ctx, &ws, Some(spec))?;
+    if !valid_skill_name(&name) {
+        bail!("`{name}` is not a valid experiment name (lowercase letters, digits and single hyphens)");
+    }
+    let rel = ws.skill(&skill)?.path.clone();
+    let branch = experiment_branch(&skill, &name);
+    if git::checkout_of(&ws.root, &branch).is_none() {
+        let wt = worktree_path(&ws, &branch);
+        ensure_ignored(&ws.root)?;
         std::fs::create_dir_all(wt.parent().unwrap())?;
-        let exists = git::git_ok(&ws.root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")]);
-        if exists {
-            git(&ws.root, &["worktree", "add", "-q", &wt.to_string_lossy(), &b])?;
+        if git::branch_exists(&ws.root, &branch) {
+            git::run(&ws.root, &["worktree", "add", "-q", &wt.to_string_lossy(), &branch])?;
         } else {
-            git(&ws.root, &["worktree", "add", "-q", "-b", &b, &wt.to_string_lossy(), "HEAD"])?;
+            if !git::git_ok(&ws.root, &["cat-file", "-e", &format!("HEAD:{rel}")]) {
+                bail!("`{skill}` is not committed yet; commit it first, so the experiment starts from it");
+            }
+            git::run(&ws.root, &["worktree", "add", "-q", "-b", &branch, &wt.to_string_lossy(), "HEAD"])?;
         }
     }
-    if !wt.join(&rel).exists() {
-        bail!("branch `{b}` has no {rel} (commit the skill on your main branch first)");
-    }
-    ctx.state.meta_set(&editing_key(&ws, name), &b)?;
-    redeploy(ctx, &ws, name)?;
-    let placements = pinned_to(ctx, &ws, name, &b)?;
-    Ok(EditReport {
-        name: name.to_string(),
-        branch: Some(b),
-        path: wt.join(&rel).to_string_lossy().to_string(),
-        worktree: Some(wt.to_string_lossy().to_string()),
-        placements,
-    })
-}
-
-/// End `edit`: links pinned to the branch deploy its last commit (commit drafts first).
-pub fn edit_done(ctx: &Ctx, name: &str) -> Result<EditReport> {
-    let ws = require(ctx)?;
-    let rel = ws.skill(name)?.path.clone();
-    let key = editing_key(&ws, name);
-    let Some(branch) = ctx.state.meta_get(&key)? else { bail!("`{name}` is not being edited") };
-    let branch = Some(branch).filter(|b| !b.is_empty());
-    let dir = match &branch {
-        Some(b) => worktree_path(ctx, &ws, b),
-        None => ws.root.clone(),
-    };
-    if git(&dir, &["status", "--porcelain", "--", &rel]).map(|o| !o.trim().is_empty()).unwrap_or(false) {
-        ctx.ui.warn(&format!("{} has uncommitted changes in {}", name, dir.display()));
-    }
-    ctx.state.conn.execute("DELETE FROM meta WHERE key=?1", [key])?;
-    redeploy(ctx, &ws, name)?;
-    let placements = match &branch {
-        Some(b) => pinned_to(ctx, &ws, name, b)?,
-        None => vec![],
-    };
-    Ok(EditReport {
-        name: name.to_string(),
-        path: dir.join(&rel).to_string_lossy().to_string(),
-        worktree: branch.as_ref().map(|_| dir.to_string_lossy().to_string()),
-        branch,
-        placements,
-    })
+    experiment_info(ctx, &ws, &skill, &name, false)
 }
 
 /// Agent environment detection for commit trailers (spec §12).
@@ -1368,153 +1442,130 @@ fn agent_trailer() -> Option<String> {
 #[derive(Debug, Serialize)]
 pub struct CommitReport {
     pub name: String,
+    pub experiment: String,
     pub branch: String,
     pub commit: Option<String>,
     pub agent: Option<String>,
 }
 
-/// `tricks edit <skill> --commit -m`: commit the draft on its experiment branch (agents,
-/// pre-approved for `edit`, thus only ever commit to experiment branches).
-pub fn commit_draft(ctx: &Ctx, name: &str, message: &str) -> Result<CommitReport> {
+/// `tricks experiment commit [<skill>@<name>] -m`: commit everything changed in the
+/// experiment's worktree, on its branch (agents, pre-approved for `experiment`, thus only
+/// ever commit to experiment branches).
+pub fn experiment_commit(ctx: &Ctx, spec: Option<&str>, message: &str) -> Result<CommitReport> {
     let ws = require(ctx)?;
-    let rel = ws.skill(name)?.path.clone();
-    let branch = ctx
-        .state
-        .meta_get(&editing_key(&ws, name))?
-        .filter(|b| !b.is_empty())
-        .with_context(|| format!("`{name}` is not being edited; start an experiment with `tricks edit {name}`"))?;
-    let dir = worktree_path(ctx, &ws, &branch);
-    git(&dir, &["add", "-A", "--", &rel])?;
-    let staged = !git::git_ok(&dir, &["diff", "--cached", "--quiet", "--", &rel]);
+    let (skill, name) = experiment_spec(ctx, &ws, spec)?;
+    let branch = experiment_branch(&skill, &name);
+    let dir = git::checkout_of(&ws.root, &branch)
+        .with_context(|| format!("experiment {skill}@{name} is not checked out; `tricks experiment start {skill}@{name}`"))?;
+    git::run(&dir, &["add", "-A"])?;
+    let staged = !git::git_ok(&dir, &["diff", "--cached", "--quiet"]);
     let trailer = agent_trailer();
     let commit = if staged {
-        let mut args = commit_args(message, &trailer);
-        args.extend(["--", rel.as_str()]);
-        git(&dir, &args)?;
+        git::run(&dir, &commit_args(message, &trailer))?;
         Some(git(&dir, &["rev-parse", "HEAD"])?)
     } else {
-        ctx.ui.info(&format!("no changes to {rel} on {branch}"));
+        ctx.ui.info(&format!("no changes to commit in {skill}@{name}"));
         None
     };
-    Ok(CommitReport { name: name.into(), branch, commit, agent: detect_agent().map(String::from) })
+    Ok(CommitReport { name: skill.clone(), experiment: format!("{skill}@{name}"), branch, commit, agent: detect_agent().map(String::from) })
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct MergeOptions<'a> {
-    /// Merge the entire branch, not only the skill's folder.
-    pub whole_branch: bool,
-    /// Open a pull request on the source repo's remote instead of merging locally.
+pub struct ExperimentMergeOptions<'a> {
+    /// Push the experiment and open a pull request instead of merging locally.
     pub pr: bool,
+    /// Keep the branch and worktree after a local merge.
+    pub keep: bool,
     pub message: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize, Default)]
-pub struct MergeReport {
+pub struct ExperimentMergeReport {
+    pub skill: String,
     pub name: String,
     pub branch: String,
     /// The branch merged into (the source repo's current branch).
     pub into: String,
-    /// skill (only the skill's folder, one commit) | branch (the whole branch)
-    pub mode: String,
     pub commit: Option<String>,
+    /// Nothing left to merge (merged earlier, or its pull request landed).
+    pub already_merged: bool,
     pub pr_url: Option<String>,
     /// Files left with conflicts to resolve.
     pub conflicts: Vec<String>,
-    /// Files outside the skill that the branch also changes (not merged in skill mode).
-    pub other_paths: Vec<String>,
+    /// Links that followed the experiment and now follow the main checkout.
     pub placements: Vec<String>,
+    /// The branch and worktree were removed.
+    pub cleaned_up: bool,
 }
 
-/// `tricks merge <skill>@<branch>`: bring an experiment branch back. By default only the
-/// skill's folder, as one commit; `--whole-branch` merges the entire branch; `--pr` opens
-/// a pull request on the source repo's remote instead.
-pub fn merge_branch(ctx: &Ctx, input: &str, o: &MergeOptions) -> Result<MergeReport> {
+/// `tricks experiment merge [<skill>@<name>]`: merge the experiment branch (all of it)
+/// into the branch the source repo is on, then remove the branch and its worktree.
+/// With `--pr`, push it and open (or update) a pull request instead, keeping the worktree
+/// for review fixes.
+pub fn experiment_merge(ctx: &Ctx, spec: Option<&str>, o: &ExperimentMergeOptions) -> Result<ExperimentMergeReport> {
     let ws = require(ctx)?;
-    let (name, branch) = input.split_once('@').with_context(|| format!("use `tricks merge {input}@<branch>`"))?;
-    let rel = ws.skill(name)?.path.clone();
-    if !git::git_ok(&ws.root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]) {
-        bail!("no branch `{branch}` in the source repo");
+    let (skill, name) = experiment_spec(ctx, &ws, spec)?;
+    let branch = experiment_branch(&skill, &name);
+    if !git::branch_exists(&ws.root, &branch) {
+        bail!("no experiment {skill}@{name} (branch {branch})");
     }
     let into = git::current_branch(&ws.root).context("the source repo is not on a branch (detached HEAD)")?;
     if into == branch {
-        bail!("`{branch}` is the current branch");
+        bail!("the source repo's main checkout is on {branch}; switch it to the branch to merge into");
     }
-    if ctx.state.meta_get(&editing_key(&ws, name))?.as_deref() == Some(branch) {
-        let wt = worktree_path(ctx, &ws, branch);
-        if git(&wt, &["status", "--porcelain", "--", &rel]).map(|o| !o.trim().is_empty()).unwrap_or(false) {
-            bail!("the draft of `{name}` on {branch} has uncommitted changes; commit them first (`tricks edit {name} --commit -m \"…\"`)");
-        }
+    if let Some(wt) = git::checkout_of(&ws.root, &branch)
+        && !git::is_clean(&wt)?
+    {
+        bail!(
+            "experiment {skill}@{name} has uncommitted changes in {}; commit them first (`tricks experiment commit {skill}@{name} -m \"…\"`)",
+            wt.display()
+        );
     }
     let _lock = source_repo_lock(ctx, &ws)?;
-    let base = git(&ws.root, &["merge-base", "HEAD", branch])?;
-    let changed: Vec<String> = git(&ws.root, &["diff", "--name-only", &base, branch])?.lines().map(String::from).collect();
-    let prefix = format!("{}/", rel.trim_end_matches('/'));
-    let (in_skill, other): (Vec<String>, Vec<String>) = changed.into_iter().partition(|f| f.starts_with(&prefix));
-    let mode = if o.whole_branch { "branch" } else { "skill" };
-    let message = o
-        .message
-        .map(String::from)
-        .unwrap_or_else(|| if o.whole_branch { format!("Merge branch '{branch}'") } else { format!("Merge {branch} into {name}") });
-    let mut rep = MergeReport {
-        name: name.into(),
-        branch: branch.into(),
+    let message = o.message.map(String::from).unwrap_or_else(|| format!("Merge experiment {skill}@{name}"));
+    let mut rep = ExperimentMergeReport {
+        skill: skill.clone(),
+        name: name.clone(),
+        branch: branch.clone(),
         into: into.clone(),
-        mode: mode.into(),
-        other_paths: if o.whole_branch { vec![] } else { other.clone() },
         ..Default::default()
     };
-    if !o.whole_branch && in_skill.is_empty() {
-        bail!("{branch} has no changes to `{name}` since it branched from {into}");
-    }
-    let patch = if o.whole_branch { Vec::new() } else { git::git_raw(&ws.root, &["diff", "--binary", &base, branch, "--", &rel])? };
-    let trailer = agent_trailer();
+    let key = pr_key(&ws, &branch);
+    let open_pr = ctx.state.meta_get(&key)?;
 
     if o.pr {
-        let head = if o.whole_branch {
-            branch.to_string()
-        } else {
-            // A branch with only the skill's changes, built off the current branch.
-            let head = format!("tricks/merge-{name}-{}", branch.replace('/', "-"));
-            let wt = ctx.paths.work().join(ws.key()).join(format!("merge--{}", head.replace('/', "--")));
-            if wt.exists() {
-                let _ = git(&ws.root, &["worktree", "remove", "--force", &wt.to_string_lossy()]);
+        git::run(&ws.root, &["push", "-q", "-u", "origin", &branch]).context("pushing to the source repo's `origin` remote")?;
+        let url = match open_pr {
+            Some(u) => {
+                ctx.ui.info(&format!("pushed new commits to the open pull request {u}"));
+                u
             }
-            git(&ws.root, &["worktree", "add", "-q", "-B", &head, &wt.to_string_lossy(), "HEAD"])?;
-            let applied = git::git_with_input(&wt, &["apply", "--3way", "--whitespace=nowarn"], &patch)
-                .and_then(|_| git(&wt, &commit_args(&message, &trailer)));
-            let _ = git(&ws.root, &["worktree", "remove", "--force", &wt.to_string_lossy()]);
-            if let Err(e) = applied {
-                let _ = git(&ws.root, &["branch", "-D", &head]);
-                bail!(
-                    "the changes to `{name}` on {branch} do not apply cleanly onto {into} ({e:#}); merge locally to resolve the conflicts"
-                );
+            None => {
+                let body = format!("Merges the `{skill}@{name}` experiment (opened by New Tricks).");
+                let u = git::gh(&ws.root, &["pr", "create", "--base", &into, "--head", &branch, "--title", &message, "--body", &body])?;
+                ctx.state.meta_set(&key, &u)?;
+                u
             }
-            head
         };
-        git(&ws.root, &["push", "-q", "-u", "origin", &head]).context("pushing to the source repo's `origin` remote")?;
-        let body = if o.whole_branch {
-            format!("Merges the `{branch}` experiment (opened by New Tricks).")
-        } else {
-            format!("Merges the changes to `{name}` from the `{branch}` experiment (opened by New Tricks).")
-        };
-        let out = std::process::Command::new("gh")
-            .args(["pr", "create", "--base", &into, "--head", &head, "--title", &message, "--body", &body])
-            .current_dir(&ws.root)
-            .output()
-            .context("running gh pr create")?;
-        if !out.status.success() {
-            bail!("gh pr create failed: {}", String::from_utf8_lossy(&out.stderr).trim());
-        }
-        rep.pr_url = Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        rep.pr_url = Some(url);
         return Ok(rep);
     }
 
-    if o.whole_branch {
+    let landed = match open_pr.as_deref().and_then(|u| pr_state(ctx, &ws, u).map(|s| (u, s))) {
+        Some((u, s)) if s == "OPEN" => {
+            bail!("a pull request is open for {skill}@{name} ({u}); merge it there, or push new commits with `--pr`")
+        }
+        Some((_, s)) => s == "MERGED",
+        None => false,
+    };
+    if landed || commits_ahead(&ws, &branch) == 0 {
+        rep.already_merged = true;
+    } else {
         if !git(&ws.root, &["status", "--porcelain", "--untracked-files=no"])?.trim().is_empty() {
-            bail!("the source repo has uncommitted changes; commit or stash them before merging a whole branch");
+            bail!("the source repo has uncommitted changes; commit or stash them before merging");
         }
         // `git merge` takes no trailers: merge without committing, then commit.
-        if let Err(e) = git(&ws.root, &["merge", "--no-ff", "--no-commit", "-q", branch]) {
+        if let Err(e) = git::run(&ws.root, &["merge", "--no-ff", "--no-commit", "-q", &branch]) {
             rep.conflicts = unmerged(&ws.root);
             if rep.conflicts.is_empty() {
                 let _ = git(&ws.root, &["merge", "--abort"]);
@@ -1522,106 +1573,117 @@ pub fn merge_branch(ctx: &Ctx, input: &str, o: &MergeOptions) -> Result<MergeRep
             }
             return Ok(rep);
         }
-        git(&ws.root, &commit_args(&message, &trailer))?;
-    } else {
-        if !git(&ws.root, &["status", "--porcelain", "--", &rel])?.trim().is_empty() {
-            bail!("`{name}` has uncommitted changes on {into}; commit or stash them before merging");
-        }
-        if git::git_with_input(&ws.root, &["apply", "--3way", "--whitespace=nowarn"], &patch).is_err() {
-            rep.conflicts = unmerged(&ws.root);
-            if rep.conflicts.is_empty() {
-                bail!("the changes to `{name}` on {branch} could not be applied onto {into}");
-            }
-            return Ok(rep);
-        }
-        if git::git_ok(&ws.root, &["diff", "--cached", "--quiet", "--", &rel]) {
-            bail!("the changes to `{name}` on {branch} are already in {into}");
-        }
-        let mut args = commit_args(&message, &trailer);
-        args.extend(["--", rel.as_str()]);
-        git(&ws.root, &args)?;
+        git::run(&ws.root, &commit_args(&message, &agent_trailer()))?;
+        rep.commit = Some(git::head_commit(&ws.root)?);
     }
-    rep.commit = Some(git::head_commit(&ws.root)?);
-    // The experiment is in: stop editing it and stop deploying the branch as a variant.
-    if ctx.state.meta_get(&editing_key(&ws, name))?.as_deref() == Some(branch) {
-        ctx.state.conn.execute("DELETE FROM meta WHERE key=?1", [editing_key(&ws, name)])?;
-    }
-    if ws.skill(name)?.use_branch.as_deref() == Some(branch) {
-        ws.set_skill_field(name, "use", None)?;
-    }
-    let wf = ws.root.join(config::WORK_FILE);
-    if WorkFile::load(&ws.root)?.use_branch.get(name).map(String::as_str) == Some(branch) {
-        let mut doc = config::load_doc(&wf)?;
-        config::table_mut(&mut doc, &["use"]).remove(name);
-        config::save_doc(&wf, &doc)?;
-    }
-    // Links pinned to the merged branch now follow the default, which has the changes.
-    let ws = SourceRepo::open(&ws.root)?;
-    let skills: Vec<String> = if o.whole_branch { ws.manifest.skills.keys().cloned().collect() } else { vec![name.to_string()] };
-    for s in &skills {
-        let moved = ctx.state.conn.execute("UPDATE placements SET pin=NULL WHERE skill=?1 AND pin=?2", params![ws.skill_key(s), branch])?;
-        if s == name {
-            rep.placements = redeploy(ctx, &ws, s)?;
-        } else if moved > 0 {
-            redeploy(ctx, &ws, s)?;
-        }
+    rep.placements = release_links(ctx, &ws, &branch)?;
+    if !o.keep {
+        remove_experiment(ctx, &ws, &branch, landed)?;
+        rep.cleaned_up = true;
     }
     Ok(rep)
+}
+
+/// Links pinned to `branch` follow the main checkout again (paths of the links moved).
+fn release_links(ctx: &Ctx, ws: &SourceRepo, branch: &str) -> Result<Vec<String>> {
+    let mut moved = Vec::new();
+    for s in ws.manifest.skills.keys() {
+        let n = ctx.state.conn.execute("UPDATE placements SET pin=NULL WHERE skill=?1 AND pin=?2", params![ws.skill_key(s), branch])?;
+        if n > 0 {
+            moved.extend(redeploy(ctx, ws, s)?);
+        }
+    }
+    Ok(moved)
+}
+
+/// Remove an experiment's worktree and branch (`force`: even if git thinks it unmerged).
+fn remove_experiment(ctx: &Ctx, ws: &SourceRepo, branch: &str, force: bool) -> Result<()> {
+    if let Some(wt) = git::checkout_of(&ws.root, branch)
+        && wt != ws.root
+    {
+        let wt = wt.to_string_lossy().to_string();
+        if force {
+            git::run(&ws.root, &["worktree", "remove", "--force", &wt])?;
+        } else {
+            git::run(&ws.root, &["worktree", "remove", &wt])?;
+        }
+    }
+    git::run(&ws.root, &["branch", if force { "-D" } else { "-d" }, "-q", branch])?;
+    ctx.state.conn.execute("DELETE FROM meta WHERE key=?1", [pr_key(ws, branch)])?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct DiscardReport {
+    pub skill: String,
+    pub name: String,
+    pub branch: String,
+    /// Commits that were not merged anywhere.
+    pub discarded_commits: usize,
+    pub placements: Vec<String>,
+}
+
+/// `tricks experiment discard [<skill>@<name>]`: throw the experiment away (its worktree
+/// and branch). Asks first when that loses commits or uncommitted changes.
+pub fn experiment_discard(ctx: &Ctx, spec: Option<&str>) -> Result<DiscardReport> {
+    let ws = require(ctx)?;
+    let (skill, name) = experiment_spec(ctx, &ws, spec)?;
+    let branch = experiment_branch(&skill, &name);
+    if !git::branch_exists(&ws.root, &branch) {
+        bail!("no experiment {skill}@{name} (branch {branch})");
+    }
+    if git::current_branch(&ws.root).as_deref() == Some(branch.as_str()) {
+        bail!("the source repo's main checkout is on {branch}; switch it to another branch first");
+    }
+    let info = experiment_info(ctx, &ws, &skill, &name, false)?;
+    let mut details = Vec::new();
+    if info.ahead > 0 {
+        details.push(format!(
+            "{} commit(s) not merged into {}",
+            info.ahead,
+            git::current_branch(&ws.root).unwrap_or_else(|| "HEAD".into())
+        ));
+    }
+    if info.uncommitted {
+        details.push(format!("uncommitted changes in {}", info.worktree.clone().unwrap_or_default()));
+    }
+    if let Some(u) = &info.pr {
+        details.push(format!("the pull request {u} stays open on the remote"));
+    }
+    if (info.ahead > 0 || info.uncommitted) && !ctx.confirm(&format!("Discard experiment {skill}@{name}?"), &details)? {
+        bail!("cancelled");
+    }
+    let placements = release_links(ctx, &ws, &branch)?;
+    remove_experiment(ctx, &ws, &branch, true)?;
+    Ok(DiscardReport { skill, name, branch, discarded_commits: info.ahead, placements })
+}
+
+/// The experiment to open a shell in: (skill folder in its worktree, `<skill>@<name>`).
+pub fn experiment_dir(ctx: &Ctx, spec: Option<&str>) -> Result<(String, String)> {
+    let ws = require(ctx)?;
+    let (skill, name) = experiment_spec(ctx, &ws, spec)?;
+    let info = experiment_info(ctx, &ws, &skill, &name, false)?;
+    let path =
+        info.path.with_context(|| format!("experiment {skill}@{name} is not checked out; `tricks experiment start {skill}@{name}`"))?;
+    Ok((path, format!("{skill}@{name}")))
 }
 
 fn unmerged(root: &Path) -> Vec<String> {
     git(root, &["diff", "--name-only", "--diff-filter=U"]).map(|o| o.lines().map(String::from).collect()).unwrap_or_default()
 }
 
-#[derive(Debug, Serialize)]
-pub struct UseReport {
-    pub name: String,
-    pub variant: Option<String>,
-    pub local: bool,
-    pub placements: Vec<String>,
-}
-
-pub fn use_variant(ctx: &Ctx, input: &str, local: bool, reset: bool) -> Result<UseReport> {
-    let ws = require(ctx)?;
-    let (name, branch) = match input.split_once('@') {
-        Some((n, b)) => (n.to_string(), Some(b.to_string())),
-        None if reset => (input.to_string(), None),
-        None => bail!("use `name@branch` (or `name --reset`)"),
-    };
-    ws.skill(&name)?;
-    let branch = branch.filter(|b| b != "default");
-    if let Some(b) = &branch
-        && !git::git_ok(&ws.root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")])
-    {
-        bail!("no branch `{b}` in the source repo");
+/// Switch the source repo's main checkout to `branch`, creating it from the current
+/// commit if needed (`create` and `vendor` with `-b`).
+pub fn switch_branch(ws: &SourceRepo, branch: &str) -> Result<()> {
+    if git::current_branch(&ws.root).as_deref() == Some(branch) {
+        return Ok(());
     }
-    if local {
-        let path = ws.root.join(config::WORK_FILE);
-        let mut doc = config::load_doc(&path)?;
-        let t = config::table_mut(&mut doc, &["use"]);
-        match &branch {
-            Some(b) => {
-                t.insert(&name, config::str_value(b));
-            }
-            None => {
-                t.insert(&name, config::str_value("default"));
-            }
-        }
-        config::save_doc(&path, &doc)?;
+    if git::branch_exists(&ws.root, branch) {
+        git::run(&ws.root, &["switch", "-q", branch])?;
     } else {
-        ws.set_skill_field(&name, "use", branch.as_deref())?;
-        if reset {
-            let path = ws.root.join(config::WORK_FILE);
-            if path.exists() {
-                let mut doc = config::load_doc(&path)?;
-                config::table_mut(&mut doc, &["use"]).remove(&name);
-                config::save_doc(&path, &doc)?;
-            }
-        }
+        git::run(&ws.root, &["switch", "-q", "-c", branch])?;
     }
-    let ws = SourceRepo::open(&ws.root)?;
-    let placements = redeploy(ctx, &ws, &name)?;
-    Ok(UseReport { name, variant: branch, local, placements })
+    Ok(())
 }
 
 // ---------------------------------------------------------------- status
@@ -1638,9 +1700,10 @@ pub struct RepoSkillStatus {
     pub license: Option<config::LicenseRecord>,
     pub lint_errors: usize,
     pub lint_warnings: usize,
+    /// Other branches (not experiments) that change the skill.
     pub branches: Vec<String>,
-    pub variant: Option<String>,
-    pub editing: Option<String>,
+    /// Names of the skill's experiments.
+    pub experiments: Vec<String>,
     pub merge_in_progress: bool,
     pub dev_links: usize,
     pub uncommitted: bool,
@@ -1691,7 +1754,7 @@ pub fn status(ctx: &Ctx, ws: &SourceRepo) -> Result<RepoStatus> {
         };
         let skill_branches: Vec<String> = branches
             .iter()
-            .filter(|b| Some(b.as_str()) != current.as_deref())
+            .filter(|b| Some(b.as_str()) != current.as_deref() && !b.starts_with(EXPERIMENT_PREFIX))
             .filter(|b| {
                 let base = current.clone().unwrap_or_else(|| "HEAD".into());
                 !git::git_ok(&ws.root, &["diff", "--quiet", &format!("{base}...{b}"), "--", &s.path])
@@ -1718,8 +1781,7 @@ pub fn status(ctx: &Ctx, ws: &SourceRepo) -> Result<RepoStatus> {
             lint_errors: errs,
             lint_warnings: warns,
             branches: skill_branches,
-            variant: active_variant(ws, name).ok().flatten(),
-            editing: ctx.state.meta_get(&editing_key(ws, name)).ok().flatten().filter(|b| !b.is_empty()),
+            experiments: branches.iter().filter_map(|b| parse_experiment_branch(b)).filter(|(k, _)| k == name).map(|(_, n)| n).collect(),
             merge_in_progress: merge_state(ctx, ws, name).ok().flatten().is_some(),
             dev_links: ctx.state.placements("WHERE skill=?1", &[&ws.skill_key(name)]).map(|v| v.len()).unwrap_or(0),
             uncommitted: dirty,
@@ -1751,14 +1813,23 @@ pub fn version_file(ctx: &Ctx, ws: &SourceRepo, name: &str, which: &str, rel: &s
             Ok(std::fs::read(dir.path().join(rel)).ok())
         }
         rev => {
-            // A branch, tag or commit of the source repo.
+            // An experiment of the skill, or a branch, tag or commit of the source repo.
+            let rev = &rev_for(ws, name, rev);
             if !git::git_ok(&ws.root, &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")]) {
-                bail!("unknown version `{rev}` (a branch or commit of the source repo, or working | head | base)");
+                bail!(
+                    "unknown version `{rev}` (an experiment of the skill, a branch or commit of the source repo, or working | head | base)"
+                );
             }
             let p = format!("{}/{rel}", ws.skill(name)?.path);
             Ok(git::git_raw(&ws.root, &["show", &format!("{rev}:{p}")]).ok())
         }
     }
+}
+
+/// A revision in `diff`: the skill's experiment of that name, else the revision itself.
+fn rev_for(ws: &SourceRepo, name: &str, rev: &str) -> String {
+    let exp = experiment_branch(name, rev);
+    if git::branch_exists(&ws.root, &exp) { exp } else { rev.to_string() }
 }
 
 /// Files of a source repo skill at a git revision.
@@ -1792,7 +1863,8 @@ pub fn changed_files(ctx: &Ctx, ws: &SourceRepo, name: &str, from: &str, to: &st
     }
     for rev in [from, to] {
         if !matches!(rev, "working" | "C" | "base" | "B" | "upstream" | "U" | "candidate" | "R") {
-            paths.extend(files_at(ws, name, if rev == "head" { "HEAD" } else { rev }));
+            let rev = if rev == "head" { "HEAD".to_string() } else { rev_for(ws, name, rev) };
+            paths.extend(files_at(ws, name, &rev));
         }
     }
     // Compute a candidate once rather than per file.

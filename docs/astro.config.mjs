@@ -27,7 +27,7 @@ export default defineConfig({
 						'concepts/source-repo',
 						'concepts/discovery',
 						'concepts/links-and-trials',
-						'concepts/branch-experiments',
+						'concepts/experiments',
 						'concepts/upstream',
 						'concepts/lint',
 						'concepts/publishing',

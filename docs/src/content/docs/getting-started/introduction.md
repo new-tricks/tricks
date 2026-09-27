@@ -5,7 +5,7 @@ description: What New Tricks is, the problem it solves for skill authors, and ho
 
 New Tricks (command `tricks`) is the design-time workbench for agent skills. An agent skill is a folder with a `SKILL.md` that coding agents such as Claude Code, Codex, GitHub Copilot and Cursor load on demand. New Tricks helps you write those skills, customize other people's, test them with real agents, and ship them.
 
-You work in a **source repo**: an ordinary git repository that holds your own skills and customized copies of upstream skills. New Tricks helps you find prior art, keep your customized copies merging upstream improvements, experiment on branches, put skills in front of real agents, lint them, and publish a clean distribution repository that every popular installer understands.
+You work in a **source repo**: an ordinary git repository that holds your own skills and customized copies of upstream skills. New Tricks helps you find prior art, keep your customized copies merging upstream improvements, experiment with changes on their own branches, put skills in front of real agents, lint them, and publish a clean distribution repository that every popular installer understands.
 
 ## The problem
 
@@ -21,14 +21,14 @@ If you write skills for coding agents, you run into the same few problems:
 The core loop:
 
 ```text
-discover ─► create / vendor ─► edit on a branch ─► link & try with agents ─► merge ─► lint ─► publish
+discover ─► create / vendor ─► experiment ─► link & try with agents ─► merge ─► lint ─► publish
 ```
 
 1. **Discover.** [`tricks search`](/tricks/reference/commands/search/) runs one search over skill repositories, marketplaces, skills.sh, Tessl, ClawHub and GitHub code search, deduplicated by content. [`info`](/tricks/reference/commands/info/) and [`view`](/tricks/reference/commands/view/) show a skill's licence, risk and content before you bring it into your repo, and [`try`](/tricks/reference/commands/try/) puts it in front of your agents in the current project. See [Discovery](/tricks/concepts/discovery/).
 2. **Create or vendor.** [`create`](/tricks/reference/commands/create/) scaffolds your own skill. [`vendor`](/tricks/reference/commands/vendor/) copies an upstream skill into your source repo and records where it came from, so later upstream changes can be merged into your version. See [Source repo](/tricks/concepts/source-repo/).
-3. **Edit on a branch.** [`edit`](/tricks/reference/commands/edit/) checks out a skill on a git branch in a worktree inside the repo, so experiments never disturb the version you and your agents rely on. See [Branch experiments](/tricks/concepts/branch-experiments/).
-4. **Link and try with agents.** [`link`](/tricks/reference/commands/link/) places source repo skills in agent skill directories, user-level or in one project, live or pinned to a branch. The project's `git status` stays clean. See [Links and trials](/tricks/concepts/links-and-trials/).
-5. **Merge.** [`merge`](/tricks/reference/commands/merge/) brings an experiment back: only that skill's folder, as one commit, or as a pull request.
+3. **Experiment.** [`experiment start`](/tricks/reference/commands/experiment/) puts a change to a skill on its own git branch, in a worktree inside the repo, so experiments never disturb the version you and your agents rely on. See [Experiments](/tricks/concepts/experiments/).
+4. **Link and try with agents.** [`link`](/tricks/reference/commands/link/) places source repo skills in agent skill directories, in user scope or in one project, live or pinned to an experiment, a branch or a tag. The project's `git status` stays clean. See [Links and trials](/tricks/concepts/links-and-trials/).
+5. **Merge.** [`experiment merge`](/tricks/reference/commands/experiment/) brings an experiment back with a regular git merge, or as a pull request. [`experiment discard`](/tricks/reference/commands/experiment/) throws it away.
 6. **Lint.** [`lint`](/tricks/reference/commands/lint/) checks spec conformance, structure, triggering quality, agent compatibility and safety. See [Lint](/tricks/concepts/lint/).
 7. **Publish.** [`publish`](/tricks/reference/commands/publish/) writes a distribution repository with a Claude `marketplace.json`, `apm.yml`, provenance and changelog, gated on lint, licences and a leak check. See [Publishing](/tricks/concepts/publishing/).
 
@@ -63,11 +63,10 @@ One published repository installs with all of them: `npx skills add owner/repo`,
 | **Upstream** | The repository and path (or catalog entry) a vendored skill came from. See [Upstream tracking](/tricks/concepts/upstream/). |
 | **Link** | A source repo skill placed in an agent's skill directory for testing: a symlink, or a copy for agents that cannot follow links. See [Links and trials](/tricks/concepts/links-and-trials/). |
 | **Trial** | A skill that is not in your source repo, placed in an agent directory with `try` to evaluate it: an upstream skill at a fixed revision, or a local folder. |
-| **Draft** | A skill checked out on an experiment branch in `.tricks/work/<branch>/`. See [Branch experiments](/tricks/concepts/branch-experiments/). |
-| **Variant** | A branch of a skill chosen with `use` as the version its links deploy by default. |
+| **Experiment** | A change to one skill on its own branch, `experiment/<skill>/<name>`, checked out in `.tricks/work/`. See [Experiments](/tricks/concepts/experiments/). |
 | **Publish target** | The distribution repository that `publish` writes to. See [Publishing](/tricks/concepts/publishing/). |
 | **Catalog** | Anything `search` looks in: a skill repository, a marketplace, skills.sh, Tessl, ClawHub, GitHub code search. See [Discovery](/tricks/concepts/discovery/). |
-| **Store** | A read-only, content-addressed cache of exact skill revisions, used for trials, pinned branches and snapshots. |
+| **Store** | A read-only, content-addressed cache of exact skill revisions, used for trials, links pinned to a tag or commit, and upstream bases. |
 
 ## Where to next
 

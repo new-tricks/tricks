@@ -13,9 +13,10 @@ pub fn line(ctx: &Ctx) -> Result<String> {
         if merges > 0 {
             parts.push(format!("{merges} merge{} in progress", if merges == 1 { "" } else { "s" }));
         }
-        let editing: i64 = c.query_row("SELECT COUNT(*) FROM meta WHERE key LIKE ?1", [format!("editing:{root}:%")], |r| r.get(0))?;
-        if editing > 0 {
-            parts.push(format!("editing {editing}"));
+        let refs = crate::git::git(&ws.root, &["for-each-ref", "--format=x", "refs/heads/experiment/"]).unwrap_or_default();
+        let experiments = refs.lines().count();
+        if experiments > 0 {
+            parts.push(format!("{experiments} experiment{}", if experiments == 1 { "" } else { "s" }));
         }
     }
     let links: i64 = c.query_row("SELECT COUNT(*) FROM placements WHERE origin IN ('source-repo','trial','link')", [], |r| r.get(0))?;

@@ -11,7 +11,7 @@ New Tricks is a single binary, `tricks`, for macOS, Linux and Windows. Install i
 
 - **git** on your `PATH`. New Tricks shells out to your system git for everything, so it uses your git configuration and credential helpers.
 - **GitHub credentials** (recommended). Search, `info` and vendoring work anonymously for public repositories, but anonymous use is limited to 60 GitHub API requests an hour and skips GitHub code search. See [GitHub credentials](#github-credentials).
-- **The GitHub CLI** `gh` (optional). New Tricks borrows its token, and uses it to open pull requests for `merge --pr`, `publish --pr` and `contribute`.
+- **The GitHub CLI** `gh` (optional). New Tricks borrows its token, and uses it to open pull requests for `experiment merge --pr`, `publish --pr` and `contribute`.
 
 ## Install
 
@@ -107,7 +107,7 @@ tricks --version
 ```
 
 ```text
-tricks 0.6.0
+tricks 0.7.0
 ```
 
 ## GitHub credentials
@@ -136,7 +136,7 @@ tricks doctor
 ```
 
 ```text
-New Tricks 0.6.0
+New Tricks 0.7.0
   ✓ git                      git version 2.55.0
   ✓ gh                       GitHub CLI found
   ✓ github.com credentials   token from `gh auth token`
@@ -174,7 +174,7 @@ tricks upgrade --check
 ```
 
 ```text
-New Tricks 0.6.0 is up to date
+New Tricks 0.7.0 is up to date
 ```
 
 `tricks upgrade` recognizes the other install methods and tells you what to do instead of overwriting a managed binary. For a Homebrew install it prints ``installed with Homebrew: run `brew upgrade tricks` ``; for the binary bundled with the extension, `bundled with the VS Code extension: it updates with the extension`.

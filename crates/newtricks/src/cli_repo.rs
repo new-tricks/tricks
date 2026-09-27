@@ -1,6 +1,6 @@
 //! Source repo commands: skills in the repo, work on them, upstream, validate and ship.
 
-use crate::cli::{Cmd, emit, short};
+use crate::cli::{Cmd, ExperimentCmd, emit, short};
 use crate::ctx::Ctx;
 use crate::source_repo::{self, RepoStatus, SourceRepo, UpdateReport};
 use anyhow::{Result, bail};
@@ -21,16 +21,16 @@ pub fn run(ctx: &Ctx, c: Cmd) -> Result<()> {
                 }
             });
         }
-        Cmd::Create { name, description, from } => {
-            let ws = source_repo::require(ctx)?;
+        Cmd::Create { name, description, from, branch } => {
+            let ws = on_branch(ctx, branch.as_deref())?;
             let r = source_repo::create(ctx, &ws, &name, description.as_deref(), from.as_deref())?;
             emit(json, &r, |r| {
                 println!("created {} at {}", r.name, r.path);
                 println!("  not committed yet; edit {}/SKILL.md, then `tricks link {}` to try it", r.path, r.name);
             });
         }
-        Cmd::Vendor { skill, name, path, from, base } => {
-            let ws = source_repo::require(ctx)?;
+        Cmd::Vendor { skill, name, path, from, base, branch } => {
+            let ws = on_branch(ctx, branch.as_deref())?;
             let o =
                 source_repo::VendorOptions { name: name.as_deref(), path: path.as_deref(), from: from.as_deref(), base: base.as_deref() };
             let r = source_repo::vendor(ctx, &ws, &skill, &o)?;
@@ -90,62 +90,7 @@ pub fn run(ctx: &Ctx, c: Cmd) -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Cmd::Edit { skill, branch, shell, commit, message, done } => {
-            if commit {
-                let r = source_repo::commit_draft(ctx, &skill, message.as_deref().unwrap_or_default())?;
-                emit(json, &r, |r| match &r.commit {
-                    Some(c) => println!(
-                        "committed {} {} on {}{}",
-                        r.name,
-                        short(c),
-                        r.branch,
-                        r.agent.as_deref().map(|a| format!(" (Tricks-Agent: {a})")).unwrap_or_default()
-                    ),
-                    None => println!("nothing to commit for {} on {}", r.name, r.branch),
-                });
-                if !done {
-                    return Ok(());
-                }
-            }
-            let r = if done { source_repo::edit_done(ctx, &skill)? } else { source_repo::edit(ctx, &skill, branch.as_deref())? };
-            emit(json, &r, |r| {
-                println!("{}", r.path);
-                let b = r.branch.as_deref().unwrap_or_default();
-                if done {
-                    eprintln!("finished editing `{}`; links pinned to {b} deploy its last commit", r.name);
-                } else {
-                    eprintln!(
-                        "editing `{}` on branch {b} (`cd \"$(tricks edit {})\"` or `--shell` to work there); commit drafts with `tricks edit {} --commit -m \"…\"`, then `tricks merge {}@{b}`",
-                        r.name, r.name, r.name, r.name
-                    );
-                }
-                if !r.placements.is_empty() {
-                    eprintln!("links on {b}:");
-                } else if !done {
-                    eprintln!("to try the draft with agents: `tricks link {}@{b}`", r.name);
-                }
-                for p in &r.placements {
-                    eprintln!("  → {p}");
-                }
-            });
-            if shell {
-                open_shell(&r.path, &format!("{}@{}", r.name, r.branch.as_deref().unwrap_or_default()))?;
-            }
-        }
-        Cmd::Use { spec, local, reset } => {
-            let r = source_repo::use_variant(ctx, &spec, local, reset)?;
-            emit(json, &r, |r| {
-                println!(
-                    "{} now uses {}{}",
-                    r.name,
-                    r.variant.as_deref().unwrap_or("the main checkout (dev)"),
-                    if r.local { " (local override)" } else { "" }
-                );
-                for p in &r.placements {
-                    println!("  → {p}");
-                }
-            });
-        }
+        Cmd::Experiment(sc) => run_experiment(ctx, sc)?,
         Cmd::Diff { skill, range } => {
             let ws = source_repo::require(ctx)?;
             let (from, to) = parse_range(range.as_deref())?;
@@ -156,35 +101,6 @@ pub fn run(ctx: &Ctx, c: Cmd) -> Result<()> {
                 }
                 for (_, d) in out {
                     print!("{d}");
-                }
-            });
-        }
-        Cmd::Merge { spec, whole_branch, pr, message } => {
-            let o = source_repo::MergeOptions { whole_branch, pr, message: message.as_deref() };
-            let r = source_repo::merge_branch(ctx, &spec, &o)?;
-            emit(json, &r, |r| {
-                let what = if r.mode == "branch" { format!("branch {}", r.branch) } else { format!("{} from {}", r.name, r.branch) };
-                if let Some(u) = &r.pr_url {
-                    println!("pull request for {what} into {}: {u}", r.into);
-                } else if !r.conflicts.is_empty() {
-                    println!("merging {what} into {} stopped on conflicts:", r.into);
-                    for c in &r.conflicts {
-                        println!("    CONFLICT {c}");
-                    }
-                    println!("  resolve them, then commit with git{}", if r.mode == "branch" { " (`git merge --continue`)" } else { "" });
-                } else if let Some(c) = &r.commit {
-                    println!("merged {what} into {} ({})", r.into, short(c));
-                    for p in &r.placements {
-                        println!("  → {p}");
-                    }
-                }
-                if !r.other_paths.is_empty() {
-                    println!(
-                        "  note: {} also changes {} file(s) outside {} (not merged; use --whole-branch to include them)",
-                        r.branch,
-                        r.other_paths.len(),
-                        r.name
-                    );
                 }
             });
         }
@@ -239,7 +155,137 @@ pub fn run(ctx: &Ctx, c: Cmd) -> Result<()> {
     Ok(())
 }
 
-/// `edit --shell`: an interactive shell in the draft; `exit` returns.
+/// The source repo, switched to `branch` first when one is given (`create`/`vendor -b`).
+fn on_branch(ctx: &Ctx, branch: Option<&str>) -> Result<SourceRepo> {
+    let ws = source_repo::require(ctx)?;
+    match branch {
+        Some(b) => {
+            source_repo::switch_branch(&ws, b)?;
+            SourceRepo::open(&ws.root)
+        }
+        None => Ok(ws),
+    }
+}
+
+fn run_experiment(ctx: &Ctx, sc: ExperimentCmd) -> Result<()> {
+    let json = ctx.opts.json;
+    match sc {
+        ExperimentCmd::Start { spec, shell } => {
+            let e = source_repo::experiment_start(ctx, &spec)?;
+            let who = format!("{}@{}", e.skill, e.name);
+            emit(json, &e, |e| {
+                println!("{}", e.path.as_deref().unwrap_or_default());
+                eprintln!("experiment {who} on branch {} (`cd \"$(tricks experiment start {who})\"` or `--shell` to work there)", e.branch);
+                eprintln!(
+                    "  try it with agents: `tricks link {who} --to <project>`; commit with `tricks experiment commit {who} -m \"…\"`"
+                );
+                eprintln!("  then `tricks experiment merge {who}` (or `--pr`), or `tricks experiment discard {who}`");
+                for p in &e.links {
+                    eprintln!("  linked → {p}");
+                }
+            });
+            if shell {
+                open_shell(e.path.as_deref().unwrap_or_default(), &who)?;
+            }
+        }
+        ExperimentCmd::List { skill } => {
+            let ws = source_repo::require(ctx)?;
+            if let Some(s) = &skill {
+                ws.skill(s)?;
+            }
+            let v = source_repo::experiments(ctx, &ws, skill.as_deref(), true)?;
+            emit(json, &v, |v| {
+                if v.is_empty() {
+                    println!("no experiments; start one with `tricks experiment start <skill>@<name>`");
+                }
+                for e in v {
+                    let mut notes = vec![match e.ahead {
+                        0 => "no unmerged commits".to_string(),
+                        n => format!("{n} unmerged commit(s)"),
+                    }];
+                    if e.uncommitted {
+                        notes.push("uncommitted changes".into());
+                    }
+                    if e.worktree.is_none() {
+                        notes.push("not checked out".into());
+                    }
+                    if !e.links.is_empty() {
+                        notes.push(format!("{} link(s)", e.links.len()));
+                    }
+                    if let Some(u) = &e.pr {
+                        notes.push(format!(
+                            "pull request {u}{}",
+                            e.pr_state.as_deref().map(|s| format!(" ({})", s.to_lowercase())).unwrap_or_default()
+                        ));
+                    }
+                    println!("{:<30} {}", format!("{}@{}", e.skill, e.name), notes.join(" · "));
+                    if let Some(p) = &e.path {
+                        println!("  {p}");
+                    }
+                }
+            });
+        }
+        ExperimentCmd::Commit { spec, message } => {
+            let r = source_repo::experiment_commit(ctx, spec.as_deref(), &message)?;
+            emit(json, &r, |r| match &r.commit {
+                Some(c) => println!(
+                    "committed {} on {}{}",
+                    short(c),
+                    r.branch,
+                    r.agent.as_deref().map(|a| format!(" (Tricks-Agent: {a})")).unwrap_or_default()
+                ),
+                None => println!("nothing to commit in {}", r.experiment),
+            });
+        }
+        ExperimentCmd::Merge { spec, pr, keep, message } => {
+            let o = source_repo::ExperimentMergeOptions { pr, keep, message: message.as_deref() };
+            let r = source_repo::experiment_merge(ctx, spec.as_deref(), &o)?;
+            emit(json, &r, |r| {
+                let who = format!("{}@{}", r.skill, r.name);
+                if let Some(u) = &r.pr_url {
+                    println!("pull request for {who} into {}: {u}", r.into);
+                    println!("  the worktree stays for review fixes: commit them and run `tricks experiment merge {who} --pr` again");
+                    println!("  once it lands, `tricks experiment merge {who}` (after pulling) or `discard` removes the experiment");
+                    return;
+                }
+                if !r.conflicts.is_empty() {
+                    println!("merging {who} into {} stopped on conflicts:", r.into);
+                    for c in &r.conflicts {
+                        println!("    CONFLICT {c}");
+                    }
+                    println!("  resolve them and `git merge --continue`, then `tricks experiment merge {who}` to clean up");
+                    return;
+                }
+                match &r.commit {
+                    Some(c) => println!("merged {who} into {} ({})", r.into, short(c)),
+                    None => println!("{who} is already in {}", r.into),
+                }
+                for p in &r.placements {
+                    println!("  → {p}");
+                }
+                if r.cleaned_up {
+                    println!("  removed branch {} and its worktree", r.branch);
+                }
+            });
+        }
+        ExperimentCmd::Discard { spec } => {
+            let r = source_repo::experiment_discard(ctx, spec.as_deref())?;
+            emit(json, &r, |r| {
+                println!("discarded {}@{} (branch {})", r.skill, r.name, r.branch);
+                for p in &r.placements {
+                    println!("  → {p}");
+                }
+            });
+        }
+        ExperimentCmd::Shell { spec } => {
+            let (dir, who) = source_repo::experiment_dir(ctx, spec.as_deref())?;
+            open_shell(&dir, &who)?;
+        }
+    }
+    Ok(())
+}
+
+/// `experiment shell`: an interactive shell in the experiment; `exit` returns.
 fn open_shell(dir: &str, what: &str) -> Result<()> {
     let shell = if cfg!(windows) {
         std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
@@ -247,7 +293,7 @@ fn open_shell(dir: &str, what: &str) -> Result<()> {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
     };
     eprintln!("starting {shell} in {dir} (`exit` to return)");
-    let status = std::process::Command::new(&shell).current_dir(dir).env("TRICKS_EDITING", what).status()?;
+    let status = std::process::Command::new(&shell).current_dir(dir).env("TRICKS_EXPERIMENT", what).status()?;
     if !status.success() {
         eprintln!("shell exited with {status}");
     }
@@ -319,7 +365,7 @@ pub struct List {
     pub repos: Vec<RepoSummary>,
     /// Links of this source repo's skills (every source repo's with `--all`).
     pub links: Vec<crate::links::LinkInfo>,
-    /// Trials in this project and at user level (everywhere with `--all`).
+    /// Trials in this project and in user scope (everywhere with `--all`).
     pub trials: Vec<crate::links::LinkInfo>,
     pub unfinished_operations: Vec<String>,
 }
@@ -343,11 +389,9 @@ pub fn list(ctx: &Ctx, all: bool) -> Result<List> {
     })
 }
 
-fn place_label(scope: &str) -> String {
-    if scope == "global" { "user level".into() } else { scope.to_string() }
-}
+use crate::links::place_label;
 
-/// Links grouped by where they are: user level first, then each project.
+/// Links grouped by where they are: user scope first, then each project.
 fn print_grouped(items: &[crate::links::LinkInfo], dev: bool) {
     let mut scopes: Vec<&str> = items.iter().map(|l| l.scope.as_str()).collect();
     scopes.sort_by_key(|s| (*s != "global", s.to_string()));
@@ -493,11 +537,8 @@ pub fn print_repo_status(w: &RepoStatus, links: &[crate::links::LinkInfo]) {
         if s.lint_errors + s.lint_warnings > 0 {
             notes.push(format!("lint {}E/{}W", s.lint_errors, s.lint_warnings));
         }
-        if let Some(v) = &s.variant {
-            notes.push(format!("using {v}"));
-        }
-        if let Some(e) = &s.editing {
-            notes.push(format!("editing on {e}"));
+        if !s.experiments.is_empty() {
+            notes.push(format!("experiments: {}", s.experiments.join(", ")));
         }
         if !s.branches.is_empty() {
             notes.push(format!("branches: {}", s.branches.join(", ")));

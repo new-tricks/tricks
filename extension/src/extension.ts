@@ -4,7 +4,7 @@ import { TricksClient, withProgress } from "./client";
 import { LintDiagnostics } from "./diagnostics";
 import { DiscoverView } from "./discover";
 import { SCHEME, SkillDocumentProvider, remoteUri, versionUri } from "./docs";
-import { LinkInfo, Model } from "./model";
+import { Experiment, LinkInfo, Model } from "./model";
 import { PublishPanel } from "./publish";
 import { FrontmatterAssist } from "./frontmatter";
 import { LinksTree, SkillItem, SourceRepoTree } from "./trees";
@@ -97,6 +97,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<unknow
     const skills = (model.status?.source_repo?.skills ?? []).filter(filter ?? (() => true));
     const pick = await vscode.window.showQuickPick(skills.map((s) => ({ label: s.name, description: s.upstream ?? "local original" })), { placeHolder: "Skill" });
     return pick?.label;
+  };
+  // Experiments: `<skill>@<name>` on branch `experiment/<skill>/<name>`, checked out in
+  // `.tricks/work/`. From an experiment item, a skill item (one of its experiments), a spec or anywhere.
+  const pickExperiment = async (arg: unknown): Promise<string | undefined> => {
+    if (arg instanceof SkillItem && arg.experiment) return `${arg.skillName}@${arg.experiment}`;
+    if (typeof arg === "string" && arg.includes("@")) return arg;
+    const only = skillName(arg);
+    const specs = (model.status?.source_repo?.skills ?? [])
+      .filter((s) => !only || s.name === only)
+      .flatMap((s) => s.experiments.map((x) => `${s.name}@${x}`));
+    if (specs.length <= 1) {
+      if (!specs.length) vscode.window.showInformationMessage(only ? `${only} has no experiments.` : "No experiments.");
+      return specs[0];
+    }
+    return vscode.window.showQuickPick(specs, { placeHolder: "Experiment" });
+  };
+  const experimentInfo = async (spec: string): Promise<Experiment | undefined> => {
+    const [skill, name] = spec.split("@");
+    const r = await client.request<{ experiments: Experiment[] }>("experiment/list", { skill }, { confirm: false });
+    return r.experiments.find((x) => x.name === name);
   };
   const wsRoot = () => model.status?.source_repo?.root;
   const openSkillMd = async (dir: string) => {
@@ -260,6 +280,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<unknow
   });
 
   reg("tricks.openSkill", async (item?: SkillItem) => {
+    if (item?.experiment) {
+      const x = await experimentInfo(`${item.skillName}@${item.experiment}`);
+      if (x?.path) await openSkillMd(x.path);
+      else vscode.window.showWarningMessage(`${item.skillName}@${item.experiment} is not checked out.`);
+      return;
+    }
     const n = skillName(item);
     const s = n ? model.skill(n) : undefined;
     if (s && wsRoot()) await openSkillMd(path.join(wsRoot()!, s.path));
@@ -274,6 +300,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<unknow
       { label: "Incoming upstream", description: "base → latest upstream", from: "base", to: "upstream" },
       { label: "Candidate merge", description: "working copy → merge result (nothing is applied)", from: "working", to: "candidate" },
       { label: "Uncommitted", description: "HEAD → working copy", from: "head", to: "working" },
+      ...(s?.experiments ?? []).map((x) => ({ label: `Experiment ${x}`, description: `HEAD → ${x} (committed)`, from: "head", to: x })),
       ...(s?.branches ?? []).map((b) => ({ label: `Branch ${b}`, description: `HEAD → ${b}`, from: "head", to: b })),
     ].filter((v) => s?.upstream || v.from === "head");
     const view = await vscode.window.showQuickPick(views, { placeHolder: `Changes in ${name}` });
@@ -355,96 +382,90 @@ export async function activate(context: vscode.ExtensionContext): Promise<unknow
     await refreshAll();
   });
 
-  reg("tricks.editOnBranch", async (arg?: unknown) => {
+  reg("tricks.experimentStart", async (arg?: unknown) => {
     const name = await pickRepoSkill(arg);
     if (!name) return;
-    const branch = await vscode.window.showInputBox({ prompt: `Branch for experimenting with ${name}`, placeHolder: "e.g. terse-description", value: model.skill(name)?.editing ?? `draft/${name}` });
-    if (!branch) return;
-    const r = await withProgress(`New Tricks: editing ${name} on ${branch}`, () => client.request("sourceRepo/edit", { skill: name, branch }));
+    const exp = await vscode.window.showInputBox({
+      prompt: `Name of the experiment with ${name}`,
+      placeHolder: "e.g. terse",
+      validateInput: (v) => (/^[a-z0-9]+(-[a-z0-9]+)*$/.test(v) ? undefined : "lowercase letters, digits and single hyphens"),
+    });
+    if (!exp) return;
+    const r = await withProgress(`New Tricks: starting ${name}@${exp}`, () => client.request<Experiment>("experiment/start", { spec: `${name}@${exp}` }));
     if (!r) return;
     await refreshAll();
-    await openSkillMd(r.path);
-    vscode.window.showInformationMessage(`Editing ${name} on ${branch}. Linked agents now load this draft; save it with “Commit Draft…”, then “Merge Branch…”.`);
+    if (r.path) await openSkillMd(r.path);
+    vscode.window.showInformationMessage(
+      `Experimenting with ${name}@${exp} on ${r.branch}. Link it with “Link to Project…”, save with “Commit Experiment…”, then “Merge Experiment…”.`,
+    );
   });
 
-  reg("tricks.commitDraft", async (arg?: unknown) => {
-    const name = await pickRepoSkill(arg, (s) => !!s.editing);
-    if (!name) return;
-    const message = await vscode.window.showInputBox({ prompt: `Commit message for the ${name} draft on ${model.skill(name)?.editing ?? "its branch"}` });
+  reg("tricks.experimentCommit", async (arg?: unknown) => {
+    const spec = await pickExperiment(arg);
+    if (!spec) return;
+    const message = await vscode.window.showInputBox({ prompt: `Commit message for ${spec} (commits everything changed in the experiment)` });
     if (!message) return;
-    const r = await withProgress(`New Tricks: committing ${name}`, () => client.request("sourceRepo/edit", { skill: name, commit: true, message }));
-    if (r) vscode.window.showInformationMessage(r.commit ? `Committed ${name} (${String(r.commit).slice(0, 9)}) on ${r.branch}` : `No changes to commit for ${name}`);
+    const r = await withProgress(`New Tricks: committing ${spec}`, () => client.request("experiment/commit", { spec, message }));
+    if (r) vscode.window.showInformationMessage(r.commit ? `Committed ${spec} (${String(r.commit).slice(0, 9)}) on ${r.branch}` : `No changes to commit in ${spec}`);
     await refreshAll();
   });
 
-  reg("tricks.mergeBranch", async (arg?: unknown, branchArg?: string) => {
-    const name = await pickRepoSkill(arg, (s) => s.branches.length > 0);
-    if (!name) return;
-    const s = model.skill(name);
-    const branch = branchArg ?? (arg as any)?.branch ?? (await vscode.window.showQuickPick(s?.branches ?? [], { placeHolder: `Branch to merge into ${name}` }));
-    if (!branch) return;
+  reg("tricks.experimentMerge", async (arg?: unknown) => {
+    const spec = await pickExperiment(arg);
+    if (!spec) return;
+    const into = model.status?.source_repo?.branch ?? "the current branch";
     const how = await vscode.window.showQuickPick(
       [
-        { label: `Merge ${name} only`, description: "the skill's folder, as one commit", wholeBranch: false, pr: false },
-        { label: "Merge the whole branch", description: "every change on the branch", wholeBranch: true, pr: false },
-        { label: `Pull request for ${name}`, description: "on the source repo's remote", wholeBranch: false, pr: true },
-        { label: "Pull request for the whole branch", description: "on the source repo's remote", wholeBranch: true, pr: true },
+        { label: "Merge locally", description: `into ${into}, then remove the experiment`, pr: false, keep: false },
+        { label: "Merge and keep", description: `into ${into}, keeping the branch and worktree`, pr: false, keep: true },
+        { label: "Pull request", description: "push the experiment and open (or update) a pull request", pr: true, keep: false },
       ],
-      { placeHolder: `Merge ${branch}` },
+      { placeHolder: `Merge ${spec}` },
     );
     if (!how) return;
-    const r = await withProgress(`New Tricks: merging ${branch}`, () =>
-      client.request("sourceRepo/merge", { spec: `${name}@${branch}`, wholeBranch: how.wholeBranch, pr: how.pr }),
-    );
+    const r = await withProgress(`New Tricks: merging ${spec}`, () => client.request("experiment/merge", { spec, pr: how.pr, keep: how.keep }));
     if (!r) return;
     await refreshAll();
-    if (r.pr_url) {
-      const open = await vscode.window.showInformationMessage(`Opened ${r.pr_url}`, "Open");
+    if (r.pr_url && how.pr) {
+      const open = await vscode.window.showInformationMessage(`Pull request for ${spec}: ${r.pr_url}`, "Open");
       if (open) vscode.env.openExternal(vscode.Uri.parse(r.pr_url));
     } else if (r.conflicts.length) {
-      vscode.window.showWarningMessage(`Merging ${branch} stopped on ${r.conflicts.length} conflict(s); resolve them and commit.`);
+      vscode.window.showWarningMessage(
+        `Merging ${spec} stopped on ${r.conflicts.length} conflict(s). Resolve them, run \`git merge --continue\`, then “Merge Experiment…” again to clean up.`,
+      );
       await vscode.commands.executeCommand("workbench.view.scm");
     } else {
-      const extra = r.other_paths.length ? ` ${branch} also changes ${r.other_paths.length} file(s) outside ${name} (not merged).` : "";
-      vscode.window.showInformationMessage(`Merged ${branch} into ${r.into}.${extra}`);
+      const done = r.already_merged ? `${spec} was already merged into ${r.into}` : `Merged ${spec} into ${r.into}`;
+      const follow = r.placements.length ? `; ${r.placements.length} link(s) follow the main checkout again` : "";
+      vscode.window.showInformationMessage(`${done}${follow}${r.cleaned_up ? "; experiment removed" : ""}.`);
     }
   });
 
-  reg("tricks.editDone", async (arg?: unknown) => {
-    const name = await pickRepoSkill(arg, (s) => !!s.editing);
-    if (!name) return;
-    const r = await withProgress(`New Tricks: finishing ${name}`, () => client.request("sourceRepo/edit", { skill: name, done: true }));
-    if (r) vscode.window.showInformationMessage(`Finished editing ${name}; links deploy its active variant again.`);
+  reg("tricks.experimentDiscard", async (arg?: unknown) => {
+    const spec = await pickExperiment(arg);
+    if (!spec) return;
+    // The core asks for confirmation when commits or uncommitted changes would be lost.
+    const r = await withProgress(`New Tricks: discarding ${spec}`, () => client.request("experiment/discard", { spec }));
+    if (r) vscode.window.showInformationMessage(`Discarded ${spec}${r.placements.length ? `; ${r.placements.length} link(s) follow the main checkout again` : ""}.`);
     await refreshAll();
   });
 
-  reg("tricks.useVariant", async (arg?: unknown, branch?: string) => {
-    const name = await pickRepoSkill(arg);
-    if (!name) return;
-    const s = model.skill(name);
-    let b = branch;
-    if (!b) {
-      const pick = await vscode.window.showQuickPick([{ label: "default", description: "main checkout (live)" }, ...(s?.branches ?? []).map((x) => ({ label: x, description: "" }))], { placeHolder: `Variant of ${name} to deploy` });
-      b = pick?.label;
+  reg("tricks.experimentOpenFolder", async (arg?: unknown) => {
+    const spec = await pickExperiment(arg);
+    if (!spec) return;
+    const x = await withProgress(`New Tricks: finding ${spec}`, () => experimentInfo(spec));
+    if (!x?.worktree) {
+      if (x) vscode.window.showWarningMessage(`${spec} is not checked out; run “Start Experiment…” with the same name to pick it up.`);
+      return;
     }
-    if (!b) return;
-    const scope = await vscode.window.showQuickPick(
-      [
-        { label: "Everyone", description: "record in tricks.toml (committed)", local: false },
-        { label: "This machine only", description: "tricks.work.toml (gitignored)", local: true },
-      ],
-      { placeHolder: "Where should this choice apply?" },
-    );
-    if (!scope) return;
-    await withProgress(`New Tricks: using ${name}@${b}`, () => client.request("sourceRepo/use", { spec: `${name}@${b}`, local: scope.local }));
-    await refreshAll();
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(x.worktree), { forceNewWindow: true });
   });
 
   reg("tricks.linkAll", async () => {
     const r = await withProgress("New Tricks: linking source repo skills", () => client.request("link", {}));
     if (!r) return;
     const failed = r.errors.length ? ` (${r.errors.length} failed: ${r.errors.map((e: any) => e[0]).join(", ")})` : "";
-    vscode.window.showInformationMessage(`Linked ${r.links.length} skill(s) for your agents${failed}. Edits are live.`);
+    vscode.window.showInformationMessage(`Linked ${r.links.length} skill(s) for your agents at user scope${failed}. Edits are live.`);
     await refreshAll();
   });
 
@@ -453,16 +474,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<unknow
     if (!name) return;
     const folder = await pickProject("Link into this project");
     if (!folder) return;
-    // Follow the skill's default, or pin the link to one of its branches.
-    const s = model.status?.source_repo?.skills.find((x) => x.name === name);
+    // Follow the main checkout, or pin the link to an experiment or a branch (both live).
+    const s = model.skill(name);
     let skill = name;
-    if (s?.branches.length) {
+    if (s && (s.experiments.length || s.branches.length)) {
       const pick = await vscode.window.showQuickPick(
-        [{ label: "default", description: "follow the skill's default (working tree or `use` variant)" }, ...s.branches.map((b) => ({ label: b, description: s.editing === b ? "draft (live)" : "branch tip" }))],
+        [
+          { label: "main checkout", description: "whatever branch the source repo is on (working tree, live)", spec: name },
+          ...s.experiments.map((x) => ({ label: `experiment ${x}`, description: "worktree, live, pinned", spec: `${name}@${x}` })),
+          // An experiment wins over a plain branch of the same name; heads/ forces the branch.
+          ...s.branches.map((b) => ({ label: `branch ${b}`, description: "worktree, live, pinned", spec: `${name}@${s.experiments.includes(b) ? `heads/${b}` : b}` })),
+        ],
         { placeHolder: `What should this link of ${name} deploy?` },
       );
       if (!pick) return;
-      if (pick.label !== "default") skill = `${name}@${pick.label}`;
+      skill = pick.spec;
     }
     const agents = await pickAgents();
     if (!agents?.length) return;

@@ -3,7 +3,7 @@ title: Publishing
 description: Publish skills from your source repo to a distribution repository that APM, npx skills, Claude Code plugin marketplaces, Copilot, Codex and Cursor can install.
 ---
 
-Your [source repo](/tricks/concepts/source-repo/) is where skills are made: drafts, experiment branches, vendoring bookkeeping, notes. None of that should reach the people who use your skills. [`tricks publish`](/tricks/reference/commands/publish/) copies the skills you choose into a separate **publish target**, a git repository laid out so every common installer understands it, after checking that what you ship is committed, lints clean and may legally be redistributed.
+Your [source repo](/tricks/concepts/source-repo/) is where skills are made: work in progress, experiments, vendoring bookkeeping, notes. None of that should reach the people who use your skills. [`tricks publish`](/tricks/reference/commands/publish/) copies the skills you choose into a separate **publish target**, a git repository laid out so every common installer understands it, after checking that what you ship is committed, lints clean and may legally be redistributed.
 
 New Tricks stops there. Installing the published skills on a machine or in a project is the job of APM, `npx skills` and plugin marketplaces.
 
@@ -155,6 +155,8 @@ pushed
 - `--push` commits to the target's default branch, tags it, and pushes both.
 - `--pr` commits on a `tricks/publish-<version>` branch, pushes it and opens a pull request for review. It doesn't tag; tag the target after merging.
 - `--yes` answers the risk-diff confirmation, for CI. Without a terminal and without `--yes`, a publish with a risk diff stops and asks you to re-run with `--yes`.
+
+The `git` commands that commit, tag and push in New Tricks' clone of the target, and `gh pr create`, are printed on stderr as `$ git -C <clone> …` while they run (`-q` or `--json` hides them).
 
 Every publish commit carries a trailer naming the source commit, for example `Tricks-Source: github.com/acme/my-skills@4e1f9a2…`.
 

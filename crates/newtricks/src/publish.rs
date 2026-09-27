@@ -684,7 +684,7 @@ pub fn publish(ctx: &Ctx, opts: &PublishOptions) -> Result<PublishReport> {
     let journal = ctx.state.journal_start("publish", &format!("{} → {url}", ws.root.display()))?;
     if opts.pr {
         let branch = format!("tricks/publish-{}", version_s.clone().unwrap_or_else(|| source_commit[..9].to_string()));
-        git(&repo, &["checkout", "-q", "-B", &branch])?;
+        git::run(&repo, &["checkout", "-q", "-B", &branch])?;
     }
     for o in owned.iter().chain(old_owned.iter()) {
         crate::deploy::remove_path(&repo.join(o))?;
@@ -705,25 +705,25 @@ pub fn publish(ctx: &Ctx, opts: &PublishOptions) -> Result<PublishReport> {
     let mut add = vec!["add", "-A", "--"];
     let owned_list: Vec<String> = owned.iter().chain(old_owned.iter()).cloned().collect();
     add.extend(owned_list.iter().map(|s| s.as_str()));
-    git(&repo, &add)?;
+    git::run(&repo, &add)?;
     let msg = match &version_s {
         Some(v) => format!("Publish v{v} from {}", ws.name),
         None => format!("Publish from {}", ws.name),
     };
     let trailer = format!("Tricks-Source: {}@{}", source_label(&ws.root), source_commit);
-    git(&repo, &["commit", "-q", "-m", &msg, "--trailer", &trailer])?;
+    git::run(&repo, &["commit", "-q", "-m", &msg, "--trailer", &trailer])?;
     rep.commit = Some(git::head_commit(&repo)?);
     if let Some(v) = &version_s
         && !opts.pr
     {
         let tag = format!("v{v}");
-        git(&repo, &["tag", "-a", &tag, "-m", &format!("{} {tag}", ws.name)])?;
+        git::run(&repo, &["tag", "-a", &tag, "-m", &format!("{} {tag}", ws.name)])?;
         rep.tag = Some(tag);
     }
     let head = git::current_branch(&repo).unwrap_or_else(|| branch.clone());
-    git(&repo, &["push", "-q", "-u", "origin", &head]).with_context(|| format!("pushing to {url}"))?;
+    git::run(&repo, &["push", "-q", "-u", "origin", &head]).with_context(|| format!("pushing to {url}"))?;
     if let Some(tag) = &rep.tag {
-        git(&repo, &["push", "-q", "origin", tag])?;
+        git::run(&repo, &["push", "-q", "origin", tag])?;
     }
     rep.pushed = true;
     if opts.pr {
@@ -734,15 +734,7 @@ pub fn publish(ctx: &Ctx, opts: &PublishOptions) -> Result<PublishReport> {
             rep.changelog,
             version_s.clone().unwrap_or_default()
         );
-        let out = std::process::Command::new("gh")
-            .args(["pr", "create", "--title", &msg, "--body", &body])
-            .current_dir(&repo)
-            .output()
-            .context("running gh pr create")?;
-        if !out.status.success() {
-            bail!("gh pr create failed: {}", String::from_utf8_lossy(&out.stderr));
-        }
-        rep.pr_url = Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        rep.pr_url = Some(git::gh(&repo, &["pr", "create", "--title", &msg, "--body", &body])?);
     }
     ctx.state.journal_finish(journal, "done")?;
     Ok(rep)

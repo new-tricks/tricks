@@ -23,9 +23,12 @@ pub struct Cli {
     /// Answer yes to confirmations
     #[arg(long, short = 'y', global = true)]
     pub yes: bool,
-    /// Less progress output
-    #[arg(long, short = 'q', global = true)]
+    /// Less progress output (and no echo of the git commands that change your repositories)
+    #[arg(long, short = 'q', global = true, conflicts_with = "verbose")]
     pub quiet: bool,
+    /// Also echo read-only git commands
+    #[arg(long, short = 'v', global = true)]
+    pub verbose: bool,
     #[command(subcommand)]
     pub cmd: Cmd,
 }
@@ -55,6 +58,19 @@ pub struct SearchArgs {
     /// Exclude skills that ship scripts
     #[arg(long)]
     pub no_scripts: bool,
+    /// Only skills with at least this many installs
+    #[arg(long, value_name = "N")]
+    pub min_installs: Option<i64>,
+    /// Only skills whose repository has at least this many stars
+    #[arg(long, value_name = "N")]
+    pub min_stars: Option<i64>,
+    /// relevance | installs | stars | updated | name
+    #[arg(long, default_value = "relevance")]
+    pub sort: String,
+    /// Show how the matches spread over categories, catalogs, owners, licences and trust
+    /// (instead of the results)
+    #[arg(long)]
+    pub facets: bool,
     /// Maximum number of results
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
@@ -100,7 +116,7 @@ pub struct LinkArgs {
     /// Into this project
     #[arg(long)]
     pub to: Option<String>,
-    /// Into the user-level agent directories
+    /// Into user scope (the agents' directories in your home)
     #[arg(long)]
     pub global: bool,
     /// Agents to link for (default: the source repo's, else the user setting)
@@ -127,6 +143,60 @@ impl LinkArgs {
 }
 
 #[derive(Subcommand)]
+pub enum ExperimentCmd {
+    /// Start (or pick up) an experiment: branch experiment/<skill>/<name> in .tricks/work/; prints the skill's path there
+    Start {
+        /// <skill>@<name>
+        #[arg(value_name = "SKILL@NAME")]
+        spec: String,
+        /// Open a shell there (`exit` returns); or `cd "$(tricks experiment start <skill>@<name>)"`
+        #[arg(long)]
+        shell: bool,
+    },
+    /// Experiments and their state: unmerged commits, uncommitted changes, links, pull request
+    List {
+        /// Only this skill's
+        skill: Option<String>,
+    },
+    /// Commit everything changed in an experiment, on its branch
+    Commit {
+        /// <skill>@<name> (default: the experiment you are in)
+        #[arg(value_name = "SKILL@NAME")]
+        spec: Option<String>,
+        /// Commit message
+        #[arg(long, short = 'm')]
+        message: String,
+    },
+    /// Merge the whole experiment into the current branch, then remove its branch and worktree
+    Merge {
+        /// <skill>@<name> (default: the experiment you are in)
+        #[arg(value_name = "SKILL@NAME")]
+        spec: Option<String>,
+        /// Push it and open (or update) a pull request instead; the worktree stays for review fixes
+        #[arg(long)]
+        pr: bool,
+        /// Keep the branch and worktree after merging
+        #[arg(long, conflicts_with = "pr")]
+        keep: bool,
+        /// Merge commit (or pull request title) message
+        #[arg(long, short = 'm')]
+        message: Option<String>,
+    },
+    /// Throw an experiment away: its worktree and branch (links pinned to it follow the main checkout)
+    Discard {
+        /// <skill>@<name> (default: the experiment you are in)
+        #[arg(value_name = "SKILL@NAME")]
+        spec: Option<String>,
+    },
+    /// Open a shell in an experiment (`exit` returns)
+    Shell {
+        /// <skill>@<name> (default: the experiment you are in)
+        #[arg(value_name = "SKILL@NAME")]
+        spec: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum Cmd {
     // ------------------------------------------------------------ discover
     /// Search skills across all catalogs
@@ -146,7 +216,7 @@ pub enum Cmd {
     /// Manage the catalogs search draws on
     #[command(subcommand)]
     Catalog(CatalogCmd),
-    /// Try a skill that is not in your source repo: link it into this project (or --global)
+    /// Try a skill that is not in your source repo: link it into this project (or user scope with --global)
     Try {
         /// Upstream skill (owner/repo//skill, URL, ClawHub or .well-known id) or a local folder
         skill: String,
@@ -160,7 +230,7 @@ pub enum Cmd {
         /// Only trials in this project
         #[arg(long)]
         to: Option<String>,
-        /// Only trials in the user-level agent directories
+        /// Only trials in user scope
         #[arg(long)]
         global: bool,
         /// Every trial, everywhere
@@ -188,6 +258,9 @@ pub enum Cmd {
         /// Take the skill from this folder instead of scaffolding it
         #[arg(long)]
         from: Option<String>,
+        /// Switch the source repo to this branch first (created from the current commit if new)
+        #[arg(long, short = 'b')]
+        branch: Option<String>,
     },
     /// Vendor an upstream skill into the source repo to customize it
     Vendor {
@@ -205,6 +278,9 @@ pub enum Cmd {
         /// The upstream revision that copy started from (commit, tag or catalog version)
         #[arg(long, requires = "from")]
         base: Option<String>,
+        /// Switch the source repo to this branch first (created from the current commit if new)
+        #[arg(long, short = 'b')]
+        branch: Option<String>,
     },
     /// Remove a skill from the source repo (and its links)
     Remove {
@@ -216,7 +292,7 @@ pub enum Cmd {
         /// This source repo's links instead (`--all`: every source repo's)
         #[arg(long, conflicts_with = "trials")]
         links: bool,
-        /// Trials in this project and at user level instead (`--all`: everywhere)
+        /// Trials in this project and in user scope instead (`--all`: everywhere)
         #[arg(long)]
         trials: bool,
         /// With --links or --trials: not only this source repo's / this project's
@@ -225,61 +301,17 @@ pub enum Cmd {
     },
 
     // ------------------------------------------------------------ work on skills
-    /// Experiment with a skill on a branch, in .tricks/work/<branch> (`link <skill>@<branch>` deploys the draft)
-    Edit {
-        /// Source repo skill
-        skill: String,
-        /// Branch to experiment on (default: draft/<skill>)
-        #[arg(long, short = 'b', conflicts_with_all = ["commit", "done"])]
-        branch: Option<String>,
-        /// Open a shell in the draft (`exit` returns); or `cd "$(tricks edit <skill>)"`
-        #[arg(long, conflicts_with_all = ["commit", "done"])]
-        shell: bool,
-        /// Commit the draft on its branch
-        #[arg(long, requires = "message")]
-        commit: bool,
-        /// Commit message (with --commit)
-        #[arg(long, short = 'm', requires = "commit")]
-        message: Option<String>,
-        /// Stop editing: links pinned to the branch deploy its last commit
-        #[arg(long)]
-        done: bool,
-    },
-    /// Choose which branch variant of a skill its links deploy
-    Use {
-        /// <skill>@<branch>, or <skill> with --reset
-        #[arg(value_name = "SKILL@BRANCH")]
-        spec: String,
-        /// Machine-local choice (tricks.work.toml, not committed)
-        #[arg(long)]
-        local: bool,
-        /// Back to the main checkout
-        #[arg(long)]
-        reset: bool,
-    },
-    /// Compare versions of a skill in the source repo: branches, head, working, base
+    /// Experiment with a skill on its own branch and worktree: start, commit, merge or discard
+    #[command(subcommand)]
+    Experiment(ExperimentCmd),
+    /// Compare versions of a skill in the source repo: experiments, branches, head, working, base
     Diff {
         /// Source repo skill
         skill: String,
-        /// <from>..<to>: branch or commit names, `head`, `working`, or `base` (the upstream
-        /// revision last updated from). Default: head..working
+        /// <from>..<to>: experiment names of the skill, branch or commit names, `head`, `working`,
+        /// or `base` (the upstream revision last updated from). Default: head..working
         #[arg(value_name = "RANGE")]
         range: Option<String>,
-    },
-    /// Merge an experiment branch back: only the skill's folder, as one commit
-    Merge {
-        /// <skill>@<branch>
-        #[arg(value_name = "SKILL@BRANCH")]
-        spec: String,
-        /// Merge the whole branch, not only the skill's folder
-        #[arg(long)]
-        whole_branch: bool,
-        /// Open a pull request on the source repo's remote instead of merging locally
-        #[arg(long)]
-        pr: bool,
-        /// Commit (or pull request) message
-        #[arg(long, short = 'm')]
-        message: Option<String>,
     },
 
     // ------------------------------------------------------------ upstream
@@ -323,7 +355,7 @@ pub enum Cmd {
     // ------------------------------------------------------------ validate
     /// Link source repo skills into agent directories to test them (all when none is named)
     Link {
-        /// Source repo skill, or <skill>@<branch> (default: every skill, into the user-level directories)
+        /// Source repo skill, or <skill>@<experiment|branch|tag|commit> (default: every skill, into user scope)
         skill: Option<String>,
         #[command(flatten)]
         link: LinkArgs,
@@ -335,7 +367,7 @@ pub enum Cmd {
         /// Only links in this project
         #[arg(long)]
         to: Option<String>,
-        /// Only links in the user-level agent directories
+        /// Only links in user scope
         #[arg(long)]
         global: bool,
         /// Every source repo's links (needed outside a source repo)
@@ -410,7 +442,7 @@ pub enum Cmd {
 const GROUPS: &[(&str, &[&str])] = &[
     ("Discover", &["search", "info", "view", "catalog", "try", "untry"]),
     ("Skills in the source repo", &["init", "create", "vendor", "remove", "list"]),
-    ("Work on skills", &["edit", "use", "diff", "merge"]),
+    ("Work on skills", &["experiment", "diff"]),
     ("Upstream", &["outdated", "update", "contribute"]),
     ("Validate", &["link", "unlink", "lint"]),
     ("Ship", &["publish"]),
@@ -468,6 +500,11 @@ fn run(cli: Cli) -> Result<()> {
     let offline = cli.offline || matches!(cli.cmd, Cmd::Statusline);
     let opts = Opts { offline, yes: cli.yes, json: cli.json, cwd: std::env::current_dir()? };
     let ctx = Ctx::new(opts, Box::new(CliUi { yes: cli.yes, quiet: cli.quiet || cli.json }))?;
+    crate::git::set_echo(match (cli.quiet || cli.json, cli.verbose) {
+        (true, _) => 0,
+        (false, true) => 2,
+        (false, false) => 1,
+    });
     if !matches!(cli.cmd, Cmd::Statusline) {
         crate::source_repo::reconcile(&ctx)?;
     }
@@ -475,7 +512,13 @@ fn run(cli: Cli) -> Result<()> {
     match cli.cmd {
         Cmd::Search(a) => {
             let res = do_search(&ctx, &a)?;
-            emit(json, &res, print_search);
+            match (a.facets, json) {
+                (true, true) => {
+                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "total": res.total, "facets": res.facets }))?)
+                }
+                (true, false) => print_facets(&res),
+                (false, _) => emit(json, &res.results, print_search),
+            }
         }
         Cmd::Info { skill } => {
             let r = crate::inspect::info(&ctx, &skill)?;
@@ -552,7 +595,7 @@ fn run(cli: Cli) -> Result<()> {
 
 fn print_links(r: &crate::links::LinkReport) {
     for l in &r.links {
-        let into = if l.scope == "global" { "the user-level agent directories".to_string() } else { l.scope.clone() };
+        let into = crate::links::place_label(&l.scope);
         let from = l
             .source
             .as_deref()
@@ -647,7 +690,7 @@ fn run_catalog(ctx: &Ctx, sc: CatalogCmd) -> Result<()> {
     Ok(())
 }
 
-pub fn do_search(ctx: &Ctx, a: &SearchArgs) -> Result<Vec<crate::index::SearchResult>> {
+pub fn do_search(ctx: &Ctx, a: &SearchArgs) -> Result<crate::index::SearchOutcome> {
     let q = a.query.join(" ");
     let _ = crate::catalogs::refresh(ctx, a.refresh, None)?;
     if !a.no_live {
@@ -661,8 +704,11 @@ pub fn do_search(ctx: &Ctx, a: &SearchArgs) -> Result<Vec<crate::index::SearchRe
         owner: a.owner.clone(),
         no_scripts: a.no_scripts,
         category: a.category.clone(),
+        min_installs: a.min_installs,
+        min_stars: a.min_stars,
     };
-    crate::index::search(ctx, &q, &f, a.limit)
+    let sort = crate::index::Sort::parse(&a.sort)?;
+    crate::index::search_full(ctx, &q, &f, sort, a.limit)
 }
 
 pub fn short(c: &str) -> &str {
@@ -724,6 +770,28 @@ fn print_search(res: &Vec<crate::index::SearchResult>) {
             extra.push(r.risk.join(", "));
         }
         println!("    [{}]{}", tags.join(" · "), if extra.is_empty() { String::new() } else { format!("  {}", extra.join(" · ")) });
+    }
+}
+
+fn print_facets(r: &crate::index::SearchOutcome) {
+    println!("{} matching skill(s)", r.total);
+    for (title, counts) in [
+        ("categories", &r.facets.categories),
+        ("catalogs", &r.facets.catalogs),
+        ("owners", &r.facets.owners),
+        ("licence", &r.facets.license),
+        ("trust", &r.facets.trust),
+    ] {
+        if counts.is_empty() {
+            continue;
+        }
+        println!("{title}:");
+        for (k, n) in counts.iter().take(25) {
+            println!("  {n:>5}  {k}");
+        }
+        if counts.len() > 25 {
+            println!("  … {} more", counts.len() - 25);
+        }
     }
 }
 

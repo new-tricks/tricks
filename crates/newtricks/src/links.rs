@@ -38,7 +38,7 @@ pub struct Linked {
     /// The branch a source repo skill's link deploys, and whether it is pinned to it.
     pub branch: Option<String>,
     pub pinned: bool,
-    /// working-tree | draft | snapshot (source repo skills)
+    /// working-tree | worktree | snapshot (source repo skills)
     pub source: Option<String>,
     pub commit: Option<String>,
     /// (agent, path, mode)
@@ -61,8 +61,8 @@ pub struct LinkOptions<'a> {
     pub shadow: bool,
 }
 
-/// Target scope: `--to <dir>`, `--global`, or the default — user-level agent directories
-/// for source repo and local skills, the current project for upstream trials.
+/// Target scope: `--to <dir>`, `--global` (user scope), or the default: user scope for
+/// source repo and local skills, the current project for upstream trials.
 fn scope_for(ctx: &Ctx, o: &LinkOptions, trial: bool) -> Result<Scope> {
     match (o.to, o.global) {
         (Some(_), true) => bail!("use either --to <path> or --global"),
@@ -89,6 +89,22 @@ fn agents_for(ctx: &Ctx, names: &[String]) -> Result<Vec<&'static Agent>> {
         Some(ws) => ws.agents(ctx),
         None => crate::user::default_agents(&crate::user::config(ctx)?),
     }
+}
+
+/// The agents to place a skill for in `scope`. At user scope, configured agents that
+/// already load skills from another selected agent's directory are left out, so each
+/// agent sees the skill once; agents named with `--agents` are always placed.
+pub fn agents_for_scope(ctx: &Ctx, o: &LinkOptions, scope: &Scope, target: &Path) -> Result<Vec<&'static Agent>> {
+    let selected = agents_for(ctx, o.agents)?;
+    if !o.agents.is_empty() || *scope != Scope::Global {
+        return Ok(selected);
+    }
+    let chosen = agents::cover_user_scope(&selected, target, o.copy);
+    for a in selected.iter().filter(|a| !chosen.iter().any(|c| c.id == a.id)) {
+        let via: Vec<&str> = chosen.iter().filter(|c| a.also_reads.contains(&c.user_dir)).map(|c| c.user_dir).collect();
+        ctx.ui.info(&format!("{} loads user-scope skills from ~/{}, so it is not linked separately", a.id, via.join(" and ~/")));
+    }
+    Ok(chosen)
 }
 
 /// A skill of the current source repo: a name, `name@branch`, or a directory inside it.
@@ -177,12 +193,12 @@ pub fn target_key(ctx: &Ctx, input: &str) -> Option<String> {
 
 /// `tricks link [skill]`: link a source repo skill, or with no skill all of them.
 pub fn link(ctx: &Ctx, input: Option<&str>, o: &LinkOptions) -> Result<LinkReport> {
-    let agents_sel = agents_for(ctx, o.agents)?;
     let mut rep = LinkReport::default();
     let Some(input) = input else {
         let ws = crate::source_repo::current(ctx)?
             .context("`tricks link` links the skills of a source repo: run it inside one, or use `tricks try <skill>` for anything else")?;
         let scope = scope_for(ctx, o, false)?;
+        let agents_sel = agents_for_scope(ctx, o, &scope, &ws.root)?;
         for name in ws.manifest.skills.keys() {
             match crate::source_repo::place_skill(ctx, &ws, name, &agents_sel, &scope, o.copy, o.shadow) {
                 Ok(ps) => rep.links.push(Linked {
@@ -192,7 +208,7 @@ pub fn link(ctx: &Ctx, input: Option<&str>, o: &LinkOptions) -> Result<LinkRepor
                     trial: false,
                     branch: ps.first().and_then(|p| p.branch.clone()),
                     pinned: ps.iter().any(|p| p.pin.is_some()),
-                    source: ps.first().map(|p| source_kind(&p.target, p.commit.as_deref()).to_string()),
+                    source: ps.first().map(|p| source_kind(p).to_string()),
                     commit: ps.first().and_then(|p| p.commit.clone()),
                     placements: ps.into_iter().map(|p| (p.agent, p.path, p.mode)).collect(),
                 }),
@@ -209,7 +225,7 @@ pub fn link(ctx: &Ctx, input: Option<&str>, o: &LinkOptions) -> Result<LinkRepor
             None => bail!("not inside a source repo; to try `{input}`, use `tricks try {input}`"),
         }
     };
-    rep.links.push(place(ctx, t, o, &agents_sel)?);
+    rep.links.push(place(ctx, t, o)?);
     Ok(rep)
 }
 
@@ -218,18 +234,19 @@ pub fn try_skill(ctx: &Ctx, input: &str, o: &LinkOptions) -> Result<LinkReport> 
     if repo_target(ctx, input)?.is_some() {
         bail!("`{input}` is a skill of this source repo; link it with `tricks link {input}`");
     }
-    let agents_sel = agents_for(ctx, o.agents)?;
     let t = trial_target(ctx, input)?;
-    Ok(LinkReport { links: vec![place(ctx, t, o, &agents_sel)?], errors: vec![] })
+    Ok(LinkReport { links: vec![place(ctx, t, o)?], errors: vec![] })
 }
 
-fn place(ctx: &Ctx, t: LinkTarget, o: &LinkOptions, agents_sel: &[&'static Agent]) -> Result<Linked> {
+fn place(ctx: &Ctx, t: LinkTarget, o: &LinkOptions) -> Result<Linked> {
     let scope = scope_for(ctx, o, t.trial)?;
+    let agents_sel = agents_for_scope(ctx, o, &scope, &t.dir)?;
     if t.dev && agents_sel.iter().any(|a| !a.follows_links(&t.dir)) && !o.copy {
         ctx.ui.warn("some selected agents cannot follow links here; they get a copy, so live edits will not show until you re-link");
     }
     let origin = if t.trial { "trial" } else { "source-repo" };
     let mut placements = Vec::new();
+    let mut last = None;
     for a in agents_sel {
         let p = deploy::place(
             ctx,
@@ -248,9 +265,10 @@ fn place(ctx: &Ctx, t: LinkTarget, o: &LinkOptions, agents_sel: &[&'static Agent
                 branch: t.branch.clone(),
             },
         )?;
-        placements.push((a.id.to_string(), p.path, p.mode));
+        placements.push((a.id.to_string(), p.path.clone(), p.mode.clone()));
+        last = Some(p);
     }
-    let source = (!t.trial).then(|| source_kind(&t.dir.to_string_lossy(), t.commit.as_deref()).to_string());
+    let source = last.filter(|_| !t.trial).map(|p| source_kind(&p).to_string());
     Ok(Linked {
         skill: t.skill,
         name: t.name,
@@ -264,27 +282,29 @@ fn place(ctx: &Ctx, t: LinkTarget, o: &LinkOptions, agents_sel: &[&'static Agent
     })
 }
 
-/// Where a source repo skill's link points: `working-tree`, `draft` (an experiment
-/// checked out by `tricks edit`) or `snapshot` (a commit, in the store).
-fn source_kind(target: &str, commit: Option<&str>) -> &'static str {
-    if commit.is_some() {
-        "snapshot"
-    } else if target.replace('\\', "/").contains(&format!("/{}/", crate::config::WORK_DIR)) {
-        "draft"
-    } else {
-        "working-tree"
+/// Where a source repo skill's link points: `working-tree` (the source repo's main
+/// checkout), `worktree` (another checkout of a branch, such as an experiment's) or
+/// `snapshot` (a commit or tag, frozen in the store).
+pub fn source_kind(p: &crate::state::Placement) -> &'static str {
+    if p.commit.is_some() {
+        return "snapshot";
+    }
+    let root = p.skill.strip_prefix("ws:").and_then(|k| k.rsplit_once("//")).map(|(r, _)| PathBuf::from(r));
+    let target = Path::new(&p.target);
+    match root {
+        Some(r) if target.starts_with(&r) && !target.starts_with(r.join(crate::config::WORK_DIR)) => "working-tree",
+        _ => "worktree",
     }
 }
 
 /// How a source repo skill's link deploys, for people: `main (working tree, live)`,
-/// `terse (draft, live)`, `verbose @ 3f2a1c9 (snapshot)`; `pinned` when it does not follow
-/// the default.
+/// `experiment/pdf/terse (worktree, live, pinned)`, `v1.2.0 @ 3f2a1c9 (snapshot, pinned)`.
 pub fn describe(branch: Option<&str>, pinned: bool, source: &str, commit: Option<&str>) -> String {
     let b = branch.unwrap_or("detached");
     let pin = if pinned { ", pinned" } else { "" };
     match (source, commit) {
         ("snapshot", Some(c)) => format!("{b} @ {} (snapshot{pin})", &c[..c.len().min(7)]),
-        ("draft", _) => format!("{b} (draft, live{pin})"),
+        ("worktree", _) => format!("{b} (worktree, live{pin})"),
         _ => format!("{b} (working tree, live{pin})"),
     }
 }
@@ -333,17 +353,45 @@ fn narrowed(ctx: &Ctx, o: &UnlinkOptions) -> Result<Option<String>> {
     })
 }
 
-fn remove(ctx: &Ctx, filter: &str, keep: impl Fn(&crate::state::Placement) -> bool) -> Result<Vec<String>> {
-    let mut removed = Vec::new();
-    for p in ctx.state.placements(filter, &[])? {
-        if keep(&p) {
-            deploy::remove_placement(ctx, &p)?;
-            removed.push(p.path);
+/// Remove the placements `keep` selects. `broad` removals (no skill named, or `--all`)
+/// that take more than one placement ask first, listing what goes.
+fn remove(ctx: &Ctx, filter: &str, what: &str, broad: bool, keep: impl Fn(&crate::state::Placement) -> bool) -> Result<Vec<String>> {
+    let chosen: Vec<crate::state::Placement> = ctx.state.placements(filter, &[])?.into_iter().filter(|p| keep(p)).collect();
+    if broad && chosen.len() > 1 {
+        let mut places: Vec<String> = chosen.iter().map(|p| place_label(&p.scope)).collect();
+        places.sort();
+        places.dedup();
+        let mut details: Vec<String> = places
+            .iter()
+            .map(|pl| {
+                let n = chosen.iter().filter(|p| &place_label(&p.scope) == pl).count();
+                format!("{pl}: {n}")
+            })
+            .collect();
+        let pinned = chosen.iter().filter(|p| p.pin.is_some()).count();
+        if pinned > 0 {
+            details.push(format!("{pinned} of them pinned to a branch or commit (linking again does not restore the pin)"));
+        }
+        let prompt = format!("Remove {} {what} in {} place(s)?", chosen.len(), places.len());
+        if !ctx.confirm(&prompt, &details)? {
+            bail!("cancelled");
         }
     }
-    // The store is a cache: drop what no link needs any more.
+    let mut removed = Vec::new();
+    for p in chosen {
+        deploy::remove_placement(ctx, &p)?;
+        removed.push(p.path);
+    }
+    // The store is a cache: drop what no link needs any more; likewise the worktrees
+    // made only so that a link could deploy a branch.
     let _ = store::gc(ctx, false);
+    crate::source_repo::prune_link_worktrees(ctx)?;
     Ok(removed)
+}
+
+/// `user scope` or the project path, for people.
+pub fn place_label(scope: &str) -> String {
+    if scope == "global" { "user scope".into() } else { scope.to_string() }
 }
 
 /// `tricks unlink [skill]`: remove links of source repo skills — one skill's, or with no
@@ -363,7 +411,7 @@ pub fn unlink(ctx: &Ctx, input: Option<&str>, o: &UnlinkOptions) -> Result<Unlin
         (None, None, false) => bail!("not inside a source repo: name a skill, or pass --all to unlink every source repo's links"),
     };
     let key = input.and_then(|i| repo_target(ctx, i).ok().flatten()).map(|t| t.skill);
-    let removed = remove(ctx, DEV, |p| {
+    let removed = remove(ctx, DEV, "link(s)", input.is_none() || o.all, |p| {
         scope.as_ref().is_none_or(|s| &p.scope == s)
             && repo_prefix.as_ref().is_none_or(|pre| p.skill.starts_with(pre))
             && input.is_none_or(|i| key.as_deref() == Some(p.skill.as_str()) || (key.is_none() && matches(p, i)))
@@ -388,7 +436,9 @@ pub fn untry(ctx: &Ctx, input: Option<&str>, o: &UnlinkOptions) -> Result<Unlink
         (None, None, false) => Some(crate::paths::canon(&ctx.opts.cwd)?.to_string_lossy().to_string()),
         _ => None,
     };
-    let removed = remove(ctx, TRIALS, |p| scope.as_ref().is_none_or(|s| &p.scope == s) && input.is_none_or(|i| matches(p, i)))?;
+    let removed = remove(ctx, TRIALS, "trial(s)", input.is_none() || o.all, |p| {
+        scope.as_ref().is_none_or(|s| &p.scope == s) && input.is_none_or(|i| matches(p, i))
+    })?;
     if let (true, Some(i)) = (removed.is_empty(), input) {
         bail!("`{i}` is not being tried");
     }
@@ -401,7 +451,7 @@ pub struct LinkInfo {
     /// The skill's directory name in the agent directory.
     pub name: String,
     pub agent: String,
-    /// `global` (user-level agent directories) or a project path
+    /// `global` (user scope) or a project path
     pub scope: String,
     pub path: String,
     pub mode: String,
@@ -410,10 +460,10 @@ pub struct LinkInfo {
     /// ok | missing | replaced | target-missing | project-missing | drifted
     pub health: String,
     /// Source repo skills: the branch the link deploys, and whether it is pinned to it
-    /// (`link <skill>@<branch>`) rather than following the skill's default.
+    /// (`link <skill>@<ref>`) rather than following the main checkout.
     pub branch: Option<String>,
     pub pinned: bool,
-    /// Source repo skills: working-tree | draft | snapshot
+    /// Source repo skills: working-tree | worktree | snapshot
     pub source: Option<String>,
     /// The commit of a snapshot.
     pub commit: Option<String>,
@@ -422,7 +472,7 @@ pub struct LinkInfo {
 fn info(p: crate::state::Placement) -> LinkInfo {
     let dev = p.origin == "source-repo";
     LinkInfo {
-        source: dev.then(|| source_kind(&p.target, p.commit.as_deref()).to_string()),
+        source: dev.then(|| source_kind(&p).to_string()),
         branch: p.branch.clone().filter(|_| dev),
         pinned: p.pin.is_some(),
         commit: p.commit.clone(),

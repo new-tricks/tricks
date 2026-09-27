@@ -56,3 +56,78 @@ fn a_new_user_config_lists_the_recommended_catalogs() {
     s2.ok(&["--offline", "catalog", "list"]);
     assert!(!read(&s2.config.join("tricks.toml")).contains("anthropics"));
 }
+
+#[test]
+fn search_sorts_and_reports_facets() {
+    let s = Sandbox::new();
+    s.upstream(
+        "acme",
+        "skills",
+        &[
+            ("skills/zeta-notes/SKILL.md", &skill_md("zeta-notes", "Take meeting notes. Use when summarizing a meeting.", "body\n")),
+            ("skills/alpha-notes/SKILL.md", &skill_md("alpha-notes", "Write release notes. Use when tagging a release.", "body\n")),
+        ],
+    );
+    s.upstream(
+        "other",
+        "kit",
+        &[("skills/beta-notes/SKILL.md", &skill_md("beta-notes", "Notes for talks. Use when preparing a talk.", "body\n"))],
+    );
+    s.ok(&["catalog", "add", "acme/skills"]);
+    s.ok(&["catalog", "add", "other/kit"]);
+    let r = s.json(&["search", "--no-live", "--sort", "name", "notes"]);
+    let names: Vec<&str> = r.as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["alpha-notes", "beta-notes", "zeta-notes"], "{r}");
+    let f = s.json(&["search", "--no-live", "--facets", "notes"]);
+    assert_eq!(f["total"], 3, "{f}");
+    assert_eq!(f["facets"]["owners"], serde_json::json!([["acme", 2], ["other", 1]]), "{f}");
+    let human = s.ok(&["search", "--no-live", "--facets", "notes"]);
+    assert!(human.contains("3 matching skill(s)") && human.contains("owners:"), "{human}");
+    let r = s.json(&["search", "--no-live", "--min-installs", "1", "notes"]);
+    assert!(r.as_array().unwrap().is_empty(), "no installs recorded: {r}");
+    let err = s.fail_in(&s.root(), &["search", "--sort", "popular", "notes"]);
+    assert!(err.contains("unknown sort `popular`"), "{err}");
+}
+
+#[test]
+#[cfg(unix)]
+fn first_run_detects_agents_and_links_once_per_agent() {
+    let mut s = Sandbox::new();
+    std::fs::remove_file(s.config.join("tricks.toml")).unwrap();
+    for d in [".codex", ".cursor"] {
+        std::fs::create_dir_all(s.home.join(d)).unwrap();
+    }
+    // Keep agents installed on this machine out of it.
+    s.env.push(("PATH".into(), "/usr/bin:/bin".into()));
+    s.ok(&["--offline", "catalog", "list"]);
+    let cfg = read(&s.config.join("tricks.toml"));
+    assert!(cfg.contains(r#"agents = ["codex", "cursor"]"#), "{cfg}");
+    // Cursor loads ~/.agents/skills, where Codex's links go, so it is not linked twice.
+    let ws = s.project("my-skills");
+    git(&ws, &["init", "-q", "-b", "main"]);
+    s.ok_in(&ws, &["init"]);
+    s.ok_in(&ws, &["create", "greeter", "--description", "Greets people. Use when the user asks for a greeting."]);
+    let o = s.cmd(&ws, &["link"]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("cursor loads user-scope skills from ~/.agents/skills"), "{o:?}");
+    assert!(s.home.join(".agents/skills/greeter").exists());
+    assert!(!s.home.join(".cursor/skills/greeter").exists());
+    // Named agents are always linked.
+    s.ok_in(&ws, &["link", "--agents", "cursor"]);
+    assert!(s.home.join(".cursor/skills/greeter").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn create_on_a_branch() {
+    let s = Sandbox::new();
+    let ws = s.project("my-skills");
+    git(&ws, &["init", "-q", "-b", "main"]);
+    s.ok_in(&ws, &["init"]);
+    commit_all(&ws, "init");
+    let o =
+        s.cmd(&ws, &["create", "greeter", "-b", "add-greeter", "--description", "Greets people. Use when the user asks for a greeting."]);
+    assert!(o.status.success(), "{o:?}");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("$ git switch -q -c add-greeter"), "{o:?}");
+    assert_eq!(git(&ws, &["branch", "--show-current"]), "add-greeter");
+    assert!(read(&ws.join("tricks.toml")).contains("[skills.greeter]"));
+}

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- **Experiments** replace editing on a branch, drafts and variants: **Start Experiment…** (a name per skill, on branch `experiment/<skill>/<name>` in its own worktree), **Commit Experiment…**, **Merge Experiment…** (merge locally, merge and keep, or pull request), **Discard Experiment…** and **Open Experiment Folder**. Experiments show under their skill in the Source Repo view, with commit and merge inline. Removed: *Experiment on a Branch…*, *Commit Draft…*, *Merge Branch…*, *Finish Editing* and *Use Variant…*.
+- **Link to Project…** offers the main checkout, an experiment or a branch; the Links view shows what each link deploys as the CLI does (`main (working tree, live)`, `experiment/pdf/terse (worktree, live, pinned)`, `v1.2.0 @ 3f2a1c9 (snapshot, pinned)`).
+- **Show Changes…** can compare a skill with its experiments.
+- "User scope" replaces "user-level" for links in your agents' user directories.
+- **Unlink This Source Repo's Skills**, **Remove All Trials** and **Discard Experiment…** ask for confirmation when the core does.
+
 ## 0.6.0
 
 - Each link deploys its own branch: **Link to Project…** asks whether to follow the skill's default or a branch, and the Links view shows what every link deploys (`main (live)`, `terse (draft, pinned)`, `verbose @ 3f2a1c9`). **Experiment on a Branch…** no longer re-points your other links.

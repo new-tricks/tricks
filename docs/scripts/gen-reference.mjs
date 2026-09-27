@@ -43,7 +43,7 @@ const CONCEPT = {
 	search: 'concepts/discovery', info: 'concepts/discovery', view: 'concepts/discovery', catalog: 'concepts/discovery',
 	try: 'concepts/links-and-trials', untry: 'concepts/links-and-trials', link: 'concepts/links-and-trials', unlink: 'concepts/links-and-trials',
 	init: 'concepts/source-repo', create: 'concepts/source-repo', vendor: 'concepts/upstream', remove: 'concepts/source-repo', list: 'concepts/source-repo',
-	edit: 'concepts/branch-experiments', use: 'concepts/branch-experiments', diff: 'concepts/branch-experiments', merge: 'concepts/branch-experiments',
+	experiment: 'concepts/experiments', diff: 'concepts/experiments',
 	outdated: 'concepts/upstream', update: 'concepts/upstream', contribute: 'concepts/upstream',
 	lint: 'concepts/lint', publish: 'concepts/publishing', doctor: 'concepts/agents', upgrade: 'getting-started/installation',
 };
@@ -73,7 +73,7 @@ function parseHelp(text) {
 	return { about: about.join('\n').trim(), usage, sections };
 }
 
-const GLOBAL = new Set(['--json', '--offline', '-y, --yes', '-q, --quiet', '-h, --help', '-V, --version']);
+const GLOBAL = new Set(['--json', '--offline', '-y, --yes', '-q, --quiet', '-v, --verbose', '-h, --help', '-V, --version']);
 const cell = (s) => s.replace(/\|/g, '\\|').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const code = (s) => '`' + s.replace(/`/g, '') + '`';
 /** Inline markdown for help text: keep `code` spans, escape the rest for a table cell. */

@@ -22,7 +22,7 @@ added skill-creator at skills/skill-creator
   not committed yet: review and `git commit` when ready; `tricks link skill-creator` to try it
 ```
 
-[`vendor`](/tricks/reference/commands/vendor/) accepts any [skill identifier](/tricks/concepts/discovery/#skill-identifiers), including GitHub URLs and catalog-hosted skills. `--name` changes the skill's name in your repo and `--path` its location (default `skills/<name>`). The copy is left uncommitted: look it over, then commit it with git.
+[`vendor`](/tricks/reference/commands/vendor/) accepts any [skill identifier](/tricks/concepts/discovery/#skill-identifiers), including GitHub URLs and catalog-hosted skills. `--name` changes the skill's name in your repo and `--path` its location (default `skills/<name>`). `-b <branch>` switches your main checkout to that branch first, creating it if needed. The copy is left uncommitted: look it over, then commit it with git.
 
 It records the intent in `tricks.toml`:
 
@@ -149,27 +149,16 @@ merged       skill-creator → main
     updated  scripts/check_links.py
     risk     + script scripts/check_links.py
     risk     +1 URL(s): https://agentskills.io/specification
-    merged into the working tree (uncommitted); review with `git diff` and commit — agents keep the previous version until then
+    merged into the working tree (uncommitted); review with `git diff` and commit (links to the main checkout already load it)
 ```
 
 `update` three-way merges B → U into your copy and moves `base` in `tricks.lock` to the new upstream revision. The result is left **uncommitted**: review it with `git diff` or your editor's source control view, then commit it with git. Without a skill name, `update` merges every vendored skill whose policy is `review`.
 
 The skill's folder must have no uncommitted changes when you start; otherwise `update` stops and asks you to commit or stash them.
 
-### Links stay on the committed version
+### Links load the result straight away
 
-If the skill is [linked](/tricks/concepts/links-and-trials/) for testing, agents keep loading the committed version while the merge is in your working tree. The link moves to a snapshot of your last commit, and `list --links` shows it:
-
-```text
-~/code/my-app:
-  skill-creator                claude   ~/code/my-app/.claude/skills/skill-creator (link)  main @ ec630c3 (snapshot)
-```
-
-Once you commit the merged result (or abort), the next `tricks` command returns the link to your live working tree:
-
-```text
-  skill-creator                claude   ~/code/my-app/.claude/skills/skill-creator (link)  main (working tree, live)
-```
+A [link](/tricks/concepts/links-and-trials/) that follows your main checkout deploys it as it is, so agents load the merge result as soon as `update` writes it, before you commit. That lets you test the updated skill before you decide to keep it. If it doesn't work out, `git restore` the skill's folder and `tricks.lock` (or `tricks update --abort` while conflicts are open). Links pinned to an experiment, a branch or a commit aren't affected.
 
 ### Conflicts
 
@@ -264,7 +253,7 @@ tricks diff skill-creator base..
 …
 ```
 
-`base..` is short for `base..working`. [`tricks diff`](/tricks/reference/commands/diff/) also compares `head`, `working`, branches and commits; see [Branch experiments](/tricks/concepts/branch-experiments/#compare-versions).
+`base..` is short for `base..working`. [`tricks diff`](/tricks/reference/commands/diff/) also compares `head`, `working`, branches and commits; see [Experiments](/tricks/concepts/experiments/#compare-versions).
 
 ## Offer your change upstream
 
@@ -282,4 +271,4 @@ skill-creator → github.com/anthropics/skills (branch tricks/skill-creator-1790
 dry run: prepared in …/work/pr/cced1a279781-skill-creator-1790368223
 ```
 
-It takes only your B → C change for that one skill, strips New Tricks' own `tricks-*` metadata, and applies it onto upstream's current default branch. Without `--dry-run` it shows which files become public, asks for confirmation, forks the upstream with `gh`, pushes the branch and opens the pull request (`--title`, `--body` to set them). Nothing else from your source repo leaves it. If your change conflicts with current upstream, run `tricks update` first. Pull requests work for GitHub upstreams only.
+It takes only your B → C change for that one skill, strips New Tricks' own `tricks-*` metadata, and applies it onto upstream's current default branch. Without `--dry-run` it shows which files become public, asks for confirmation, forks the upstream with `gh`, pushes the branch and opens the pull request (`--title`, `--body` to set them), printing each `git` and `gh` command it runs. Nothing else from your source repo leaves it. If your change conflicts with current upstream, run `tricks update` first. Pull requests work for GitHub upstreams only.

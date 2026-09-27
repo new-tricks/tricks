@@ -149,11 +149,16 @@ pub fn dispatch(ctx: &Ctx, method: &str, p: &Value) -> Result<Value> {
                 owner: s(p, "owner").map(String::from),
                 category: s(p, "category").map(String::from),
                 no_scripts: b(p, "noScripts"),
+                min_installs: p.get("minInstalls").and_then(|v| v.as_i64()),
+                min_stars: p.get("minStars").and_then(|v| v.as_i64()),
+                sort: s(p, "sort").unwrap_or("relevance").to_string(),
+                facets: false,
                 limit: p.get("limit").and_then(|v| v.as_u64()).unwrap_or(30) as usize,
                 refresh: b(p, "refresh"),
                 no_live: b(p, "noLive"),
             };
-            to(json!({ "results": crate::cli::do_search(ctx, &a)? }))
+            let r = crate::cli::do_search(ctx, &a)?;
+            to(json!({ "results": r.results, "total": r.total, "facets": r.facets }))
         }
         "info" => to(crate::inspect::info(ctx, req(p, "skill")?)?),
         "file/read" => {
@@ -191,8 +196,16 @@ pub fn dispatch(ctx: &Ctx, method: &str, p: &Value) -> Result<Value> {
         "doctor" => to(crate::doctor::run(ctx)?),
         "sourceRepo/init" => to(ws::init(ctx, s(p, "name"), b(p, "agentSkill"))?),
         "sourceRepo/status" => to(ws::status(ctx, &ws::require(ctx)?)?),
-        "sourceRepo/create" => to(ws::create(ctx, &ws::require(ctx)?, req(p, "name")?, s(p, "description"), s(p, "from"))?),
+        "sourceRepo/create" => {
+            if let Some(br) = s(p, "branch") {
+                ws::switch_branch(&ws::require(ctx)?, br)?;
+            }
+            to(ws::create(ctx, &ws::require(ctx)?, req(p, "name")?, s(p, "description"), s(p, "from"))?)
+        }
         "sourceRepo/vendor" => {
+            if let Some(br) = s(p, "branch") {
+                ws::switch_branch(&ws::require(ctx)?, br)?;
+            }
             let o = ws::VendorOptions { name: s(p, "name"), path: s(p, "path"), from: s(p, "from"), base: s(p, "base") };
             to(ws::vendor(ctx, &ws::require(ctx)?, req(p, "skill")?, &o)?)
         }
@@ -218,21 +231,17 @@ pub fn dispatch(ctx: &Ctx, method: &str, p: &Value) -> Result<Value> {
             let o = ws::UpdateOptions { only: s(p, "skill"), dry_run: b(p, "dryRun"), cont: b(p, "continue"), abort: b(p, "abort") };
             to(ws::update(ctx, &ws::require(ctx)?, &o)?)
         }
-        "sourceRepo/edit" => {
-            let skill = req(p, "skill")?;
-            if b(p, "commit") {
-                let c = ws::commit_draft(ctx, skill, req(p, "message")?)?;
-                if !b(p, "done") {
-                    return to(c);
-                }
-            }
-            if b(p, "done") { to(ws::edit_done(ctx, skill)?) } else { to(ws::edit(ctx, skill, s(p, "branch"))?) }
+        "experiment/start" => to(ws::experiment_start(ctx, req(p, "spec")?)?),
+        "experiment/list" => {
+            let w = ws::require(ctx)?;
+            to(json!({ "experiments": ws::experiments(ctx, &w, s(p, "skill"), b(p, "prState"))? }))
         }
-        "sourceRepo/merge" => {
-            let o = ws::MergeOptions { whole_branch: b(p, "wholeBranch"), pr: b(p, "pr"), message: s(p, "message") };
-            to(ws::merge_branch(ctx, req(p, "spec")?, &o)?)
+        "experiment/commit" => to(ws::experiment_commit(ctx, s(p, "spec"), req(p, "message")?)?),
+        "experiment/merge" => {
+            let o = ws::ExperimentMergeOptions { pr: b(p, "pr"), keep: b(p, "keep"), message: s(p, "message") };
+            to(ws::experiment_merge(ctx, s(p, "spec"), &o)?)
         }
-        "sourceRepo/use" => to(ws::use_variant(ctx, req(p, "spec")?, b(p, "local"), b(p, "reset"))?),
+        "experiment/discard" => to(ws::experiment_discard(ctx, s(p, "spec"))?),
         "sourceRepo/changedFiles" => {
             let w = ws::require(ctx)?;
             to(json!({ "files": ws::changed_files(ctx, &w, req(p, "skill")?, s(p, "from").unwrap_or("head"), s(p, "to").unwrap_or("working"))? }))

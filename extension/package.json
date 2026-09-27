@@ -2,7 +2,7 @@
   "name": "new-tricks",
   "displayName": "New Tricks",
   "description": "Teach your agents new tricks: author, customize and test agent skills in a source repo — federated search, vendoring with upstream merges, branch experiments, links for testing, lint and publish.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "newtricks",
   "license": "Apache-2.0",
   "homepage": "https://new-tricks.github.io/tricks/vscode/",
@@ -165,33 +165,34 @@
         "category": "New Tricks"
       },
       {
-        "command": "tricks.editOnBranch",
-        "title": "Experiment on a Branch…",
+        "command": "tricks.experimentStart",
+        "title": "Start Experiment…",
         "category": "New Tricks",
-        "icon": "$(git-branch)"
+        "icon": "$(beaker)"
       },
       {
-        "command": "tricks.commitDraft",
-        "title": "Commit Draft…",
+        "command": "tricks.experimentCommit",
+        "title": "Commit Experiment…",
         "category": "New Tricks",
         "icon": "$(git-commit)"
       },
       {
-        "command": "tricks.mergeBranch",
-        "title": "Merge Branch…",
+        "command": "tricks.experimentMerge",
+        "title": "Merge Experiment…",
         "category": "New Tricks",
         "icon": "$(git-merge)"
       },
       {
-        "command": "tricks.editDone",
-        "title": "Finish Editing",
+        "command": "tricks.experimentDiscard",
+        "title": "Discard Experiment…",
         "category": "New Tricks",
-        "icon": "$(check)"
+        "icon": "$(discard)"
       },
       {
-        "command": "tricks.useVariant",
-        "title": "Use Variant…",
-        "category": "New Tricks"
+        "command": "tricks.experimentOpenFolder",
+        "title": "Open Experiment Folder",
+        "category": "New Tricks",
+        "icon": "$(folder-opened)"
       },
       {
         "command": "tricks.linkAll",
@@ -305,29 +306,54 @@
           "group": "inline"
         },
         {
-          "command": "tricks.editOnBranch",
+          "command": "tricks.experimentStart",
           "when": "view == tricks.sourceRepo && viewItem =~ /repoSkill/",
-          "group": "2_edit@1"
+          "group": "2_experiment@1"
         },
         {
-          "command": "tricks.commitDraft",
-          "when": "view == tricks.sourceRepo && viewItem =~ /editing/",
-          "group": "2_edit@2"
+          "command": "tricks.experimentCommit",
+          "when": "view == tricks.sourceRepo && viewItem =~ /hasExperiments/",
+          "group": "2_experiment@2"
         },
         {
-          "command": "tricks.mergeBranch",
-          "when": "view == tricks.sourceRepo && viewItem =~ /repoSkill/",
-          "group": "2_edit@4"
+          "command": "tricks.experimentMerge",
+          "when": "view == tricks.sourceRepo && viewItem =~ /hasExperiments/",
+          "group": "2_experiment@3"
         },
         {
-          "command": "tricks.editDone",
-          "when": "view == tricks.sourceRepo && viewItem =~ /editing/",
-          "group": "2_edit@2"
+          "command": "tricks.experimentDiscard",
+          "when": "view == tricks.sourceRepo && viewItem =~ /hasExperiments/",
+          "group": "2_experiment@4"
         },
         {
-          "command": "tricks.useVariant",
-          "when": "view == tricks.sourceRepo && viewItem =~ /repoSkill/",
-          "group": "2_edit@3"
+          "command": "tricks.experimentCommit",
+          "when": "view == tricks.sourceRepo && viewItem == experiment",
+          "group": "inline@1"
+        },
+        {
+          "command": "tricks.experimentMerge",
+          "when": "view == tricks.sourceRepo && viewItem == experiment",
+          "group": "inline@2"
+        },
+        {
+          "command": "tricks.experimentCommit",
+          "when": "view == tricks.sourceRepo && viewItem == experiment",
+          "group": "1_experiment@1"
+        },
+        {
+          "command": "tricks.experimentMerge",
+          "when": "view == tricks.sourceRepo && viewItem == experiment",
+          "group": "1_experiment@2"
+        },
+        {
+          "command": "tricks.experimentOpenFolder",
+          "when": "view == tricks.sourceRepo && viewItem == experiment",
+          "group": "1_experiment@3"
+        },
+        {
+          "command": "tricks.experimentDiscard",
+          "when": "view == tricks.sourceRepo && viewItem == experiment",
+          "group": "9_remove@1"
         },
         {
           "command": "tricks.linkToProject",
@@ -362,11 +388,6 @@
         {
           "command": "tricks.unlink",
           "when": "view == tricks.links && (viewItem == link || viewItem == trial)",
-          "group": "inline"
-        },
-        {
-          "command": "tricks.mergeBranch",
-          "when": "view == tricks.sourceRepo && viewItem == branch",
           "group": "inline"
         },
         {

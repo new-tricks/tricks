@@ -5,7 +5,7 @@ description: The git repository where you author, customize, test and publish sk
 
 A **source repo** is a git repository where skills are authored, customized, tested and published from. It holds your own skills (originals) and customized copies of upstream skills (vendored skills), plus anything else you keep next to them: scripts, notes, evals. It is the one thing New Tricks operates on.
 
-You own the source repo and its remote. New Tricks commits only when you ask it to (`edit --commit`, `merge`) and never pushes it, except when you ask for a pull request with `merge --pr`. Most changes it makes, such as adding or removing a skill or merging upstream changes, are left uncommitted for you to review with git.
+You own the source repo and its remote. New Tricks commits only when you ask it to (`experiment commit`, `experiment merge`) and never pushes it, except when you ask for a pull request with `experiment merge --pr`. Every git command that changes the repo is printed on stderr as `$ git …`, so you can see what it did (see [the git commands New Tricks runs](/tricks/concepts/experiments/#the-git-commands-new-tricks-runs)). Most changes it makes, such as adding or removing a skill or merging upstream changes, are left uncommitted for you to review with git.
 
 ## Make a repository a source repo
 
@@ -26,7 +26,7 @@ next: `tricks create <name>` or `tricks vendor owner/repo//skill`, then `tricks 
 
 - Writes `tricks.toml`, the manifest, with commented examples, and an empty `tricks.lock`.
 - Creates the `skills/` folder.
-- Adds `tricks.work.toml` and `/.tricks/` to `.gitignore`.
+- Adds `/.tricks/` to `.gitignore`.
 - Registers the repo in your user config under `[source-repos]`, keyed by its name. The name defaults to the directory name; `--name` sets `[source-repo] name` instead.
 
 Running `init` again in an existing source repo only registers it (useful on a new machine after cloning).
@@ -39,20 +39,18 @@ Running `init` again in an existing source repo only registers it (useful on a n
 my-skills/
   tricks.toml            # manifest: skills, upstreams, agents, lint, publish targets (committed)
   tricks.lock            # generated: base revisions and licences of vendored skills (committed)
-  tricks.work.toml       # machine-local overrides, e.g. `use --local` (git-ignored)
   skills/
     changelog-writer/
       SKILL.md
     skill-creator/
       SKILL.md
       scripts/…
-  .tricks/work/<branch>/ # worktrees of branch experiments (git-ignored)
+  .tricks/work/          # worktrees of experiments and linked branches (git-ignored)
 ```
 
 - **`tricks.toml`** records each skill's path and, for vendored skills, its upstream, what it tracks and its update policy. It also holds the agents to link for, lint settings and publish targets. You can edit it by hand; New Tricks preserves your formatting when it edits it.
 - **`tricks.lock`** records facts, not intent: for each vendored skill, the upstream revision it last incorporated (the base) and the detected licence. Don't edit it.
-- **`tricks.work.toml`** holds choices that apply to your machine only, so personal experiments never change the committed manifest.
-- **`.tricks/work/`** holds the worktrees [`edit`](/tricks/reference/commands/edit/) checks experiments out into, one per branch (`draft/changelog-writer` becomes `.tricks/work/draft--changelog-writer/`). See [Branch experiments](/tricks/concepts/branch-experiments/).
+- **`.tricks/work/`** holds the worktrees of [experiments](/tricks/concepts/experiments/) (`changelog-writer@terse` is at `.tricks/work/experiment--changelog-writer--terse/`) and of branches you link that aren't checked out anywhere else.
 
 Skills live in `skills/<name>/` by default, but any path works; `vendor --path` puts a skill elsewhere. Every key is described in the [configuration reference](/tricks/reference/configuration/).
 
@@ -74,6 +72,16 @@ tricks create release-notes --from ~/old/release-notes
 
 Either way the skill is an original: no upstream. The files and manifest changes are left uncommitted.
 
+`-b <branch>` (or `--branch`) switches your main checkout to that branch first, creating it from the current commit if it doesn't exist, so the new skill starts on a branch of its own:
+
+```bash
+tricks create greeter -b add-greeter
+```
+
+```text
+$ git switch -q -c add-greeter
+```
+
 ### Vendor an upstream skill
 
 [`tricks vendor`](/tricks/reference/commands/vendor/) copies an upstream skill into the repo to customize it:
@@ -82,7 +90,7 @@ Either way the skill is an original: no upstream. The files and manifest changes
 tricks vendor anthropics/skills//skill-creator
 ```
 
-It records the upstream in `tricks.toml` (with `track = "latest"` and `update = "review"`) and the base revision and licence in `tricks.lock`, then shows the licence class and risk surface. Skills whose licence may forbid modification ask for confirmation. Catalog-hosted skills (ClawHub, `.well-known` indexes) can be vendored too, and `vendor --from <copy> --base <rev>` records a copy you made earlier at the revision it started from. Merging later upstream changes is covered in [Upstream tracking](/tricks/concepts/upstream/).
+It records the upstream in `tricks.toml` (with `track = "latest"` and `update = "review"`) and the base revision and licence in `tricks.lock`, then shows the licence class and risk surface. Skills whose licence may forbid modification ask for confirmation. Catalog-hosted skills (ClawHub, `.well-known` indexes) can be vendored too, and `vendor --from <copy> --base <rev>` records a copy you made earlier at the revision it started from. Like `create`, `vendor -b <branch>` switches to a branch first. Merging later upstream changes is covered in [Upstream tracking](/tricks/concepts/upstream/).
 
 :::tip
 You don't have to vendor a skill to evaluate it. [`tricks try`](/tricks/reference/commands/try/) puts an upstream skill in front of your agents first; vendor it once you decide to customize it.
@@ -110,8 +118,8 @@ tricks list
 
 ```text
 source repo my-skills (~/code/my-skills, branch main)
-  changelog-writer       original · editing on terse · branches: terse · linked: ~/code/my-app (terse), user level (main)
-  skill-creator          from anthropics/skills//skills/skill-creator · customized · upstream has v1.1.0 · linked: user level (main)
+  changelog-writer       original · experiments: terse · linked: ~/code/my-app (experiment/changelog-writer/terse), user scope (main)
+  skill-creator          from anthropics/skills//skills/skill-creator · customized · upstream has v1.1.0 · linked: user scope (main)
   publish targets: public
 ```
 
@@ -126,14 +134,13 @@ The notes, in the order they appear:
 | `UPDATE IN PROGRESS` | An upstream update stopped on conflicts. Resolve them, then `tricks update --continue` (or `--abort`). |
 | `uncommitted` | The skill's folder has changes git hasn't committed. |
 | `lint <n>E/<n>W` | Lint errors and warnings. Run [`tricks lint`](/tricks/reference/commands/lint/) for details. |
-| `using <branch>` | Links follow this branch by default, chosen with [`tricks use`](/tricks/reference/commands/use/) (committed, or `--local`). |
-| `editing on <branch>` | An experiment is checked out for this skill on this branch in `.tricks/work/`. |
-| `branches: <names>` | Other local branches that changed this skill since they branched off the current one. A branch merged with `tricks merge` stays listed until you delete it, because the merge brings the changes over as a new commit. |
-| `linked: <place> (<branch>), …` | Where the skill is linked, and the branch each link deploys: `user level` for the user-level agent directories, or a project path. |
+| `experiments: <names>` | The skill's [experiments](/tricks/concepts/experiments/). `tricks experiment list` shows their state. |
+| `branches: <names>` | Other local branches (not experiments) that changed this skill since they branched off the current one. |
+| `linked: <place> (<branch>), …` | Where the skill is linked, and what each link deploys: `user scope` for the agents' directories in your home, or a project path. |
 
 `publish targets:` lists the targets in `[publish.targets]`. Upstream changes shown by `list` come from caches only; `outdated` is the command that fetches.
 
-`tricks list --json` gives the same information in machine-readable form. Each skill carries `name`, `path`, `upstream`, `base`, `track`, `customized`, `update_available`, `license`, `lint_errors`, `lint_warnings`, `branches`, `variant`, `editing`, `merge_in_progress`, `dev_links` and `uncommitted`; the report also includes `repos`, `links`, `trials` and `unfinished_operations`.
+`tricks list --json` gives the same information in machine-readable form. Each skill carries `name`, `path`, `upstream`, `base`, `track`, `customized`, `update_available`, `license`, `lint_errors`, `lint_warnings`, `experiments`, `branches`, `merge_in_progress`, `dev_links` and `uncommitted`; the report also includes `repos`, `links`, `trials` and `unfinished_operations`.
 
 `list --links` and `list --trials` show links and trials instead; see [Links and trials](/tricks/concepts/links-and-trials/).
 
@@ -160,24 +167,24 @@ source repos:
 
 Registration is also how `unlink --all` and `list --links --all` find every source repo's links, and how `doctor` checks each repo still exists. To unregister a repo, delete its line from the user config.
 
-## Commands run from a draft act on the repo
+## Commands run from a worktree act on the repo
 
-Branch experiments live in worktrees at `.tricks/work/<branch>/`, each a full checkout with its own `tricks.toml`. New Tricks maps a worktree back to the source repo it belongs to, so commands you run inside a draft (for example from `tricks edit --shell`, or an agent working there) act on the source repo:
+Experiments live in worktrees at `.tricks/work/`, each a full checkout with its own `tricks.toml`. New Tricks maps a worktree back to the source repo it belongs to, so commands you run inside one (for example from `tricks experiment shell`, or an agent working there) act on the source repo:
 
 ```bash
-cd "$(tricks edit skill-creator)"
+cd "$(tricks experiment start skill-creator@shorter)"
 tricks list
 ```
 
 ```text
 source repo my-skills (~/code/my-skills, branch main)
-  changelog-writer       original · branches: terse
-  skill-creator          from anthropics/skills//skills/skill-creator · customized · lint 0E/1W · editing on draft/skill-creator
+  changelog-writer       original · experiments: terse
+  skill-creator          from anthropics/skills//skills/skill-creator · customized · lint 0E/1W · experiments: shorter
 ```
 
 ## Related
 
 - [Upstream tracking](/tricks/concepts/upstream/): keep vendored skills current.
-- [Branch experiments](/tricks/concepts/branch-experiments/): drafts, `use` and `merge`.
+- [Experiments](/tricks/concepts/experiments/): try a change on its own branch, then merge or discard it.
 - [Links and trials](/tricks/concepts/links-and-trials/): test skills with real agents.
-- [Configuration reference](/tricks/reference/configuration/): every key in `tricks.toml`, `tricks.lock` and `tricks.work.toml`.
+- [Configuration reference](/tricks/reference/configuration/): every key in `tricks.toml` and `tricks.lock`.

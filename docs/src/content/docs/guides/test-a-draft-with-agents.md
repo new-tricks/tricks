@@ -1,11 +1,11 @@
 ---
 title: Test a draft with agents
-description: Compare the current version of a skill with a draft on a branch, side by side in real agents, then merge the draft or drop it.
+description: Compare the current version of a skill with an experiment, side by side in real agents, then merge the experiment or drop it.
 ---
 
-In this guide you keep the current `changelog-writer` linked for every project, test a terser draft in one project, and then merge the draft or throw it away. At the end, you try an upstream skill in a project before deciding whether to vendor it.
+In this guide you keep the current `changelog-writer` linked for every project, test a terser draft of it in one project as an experiment, and then merge the experiment or throw it away. At the end, you try an upstream skill in a project before deciding whether to vendor it.
 
-You need a [source repo](/tricks/concepts/source-repo/) (here `~/code/my-skills`) with `changelog-writer` committed on `main`, and a project to test in (`~/code/my-app`). The examples use Claude Code, the default agent. See [Agents](/tricks/concepts/agents/) to link for others.
+You need a [source repo](/tricks/concepts/source-repo/) (here `~/code/my-skills`) with `changelog-writer` committed on `main`, and a project to test in (`~/code/my-app`). The examples use Claude Code. See [Agents](/tricks/concepts/agents/) to link for others.
 
 ## 1. Link the current version everywhere
 
@@ -15,28 +15,30 @@ tricks link changelog-writer
 ```
 
 ```text
-linked changelog-writer into the user-level agent directories from main (working tree, live)
+linked changelog-writer into user scope from main (working tree, live)
   claude   ~/.claude/skills/changelog-writer (link)
 see links with `tricks list --links`; remove with `tricks unlink changelog-writer`
 ```
 
-The user-level link points at your working tree, so every project's agent loads the `main` version and sees your edits as soon as you save.
+The user scope link points at your main checkout, so every project's agent loads the `main` version and sees your edits as soon as you save.
 
-## 2. Start a draft on a branch
+## 2. Start an experiment
 
 ```bash
-tricks edit changelog-writer -b terse
+tricks experiment start changelog-writer@terse
 ```
 
 ```text
-~/code/my-skills/.tricks/work/terse/skills/changelog-writer
-editing `changelog-writer` on branch terse (`cd "$(tricks edit changelog-writer)"` or `--shell` to work there); commit drafts with `tricks edit changelog-writer --commit -m "…"`, then `tricks merge changelog-writer@terse`
-to try the draft with agents: `tricks link changelog-writer@terse`
+$ git worktree add -q -b experiment/changelog-writer/terse .tricks/work/experiment--changelog-writer--terse HEAD
+~/code/my-skills/.tricks/work/experiment--changelog-writer--terse/skills/changelog-writer
+experiment changelog-writer@terse on branch experiment/changelog-writer/terse (`cd "$(tricks experiment start changelog-writer@terse)"` or `--shell` to work there)
+  try it with agents: `tricks link changelog-writer@terse --to <project>`; commit with `tricks experiment commit changelog-writer@terse -m "…"`
+  then `tricks experiment merge changelog-writer@terse` (or `--pr`), or `tricks experiment discard changelog-writer@terse`
 ```
 
-The draft is a git worktree of branch `terse` at `.tricks/work/terse`, which git ignores. Open it in your editor, or `cd "$(tricks edit changelog-writer)"`. Editing it doesn't change what your agents load yet.
+The experiment is a git worktree of branch `experiment/changelog-writer/terse` at `.tricks/work/experiment--changelog-writer--terse`, which git ignores. Open it in your editor, or `cd "$(tricks experiment start changelog-writer@terse)"`. Editing it doesn't change what your agents load yet.
 
-## 3. Link the draft into one project
+## 3. Link the experiment into one project
 
 ```bash
 tricks link changelog-writer@terse --to ~/code/my-app
@@ -44,19 +46,19 @@ tricks list --links
 ```
 
 ```text
-linked changelog-writer into ~/code/my-app from terse (draft, live, pinned)
+linked changelog-writer into ~/code/my-app from experiment/changelog-writer/terse (worktree, live, pinned)
   claude   ~/code/my-app/.claude/skills/changelog-writer (link)
 see links with `tricks list --links`; remove with `tricks unlink changelog-writer`
-user level:
+user scope:
   changelog-writer             claude   ~/.claude/skills/changelog-writer (link)  main (working tree, live)
 ~/code/my-app:
-  changelog-writer             claude   ~/code/my-app/.claude/skills/changelog-writer (link)  terse (draft, live, pinned)
+  changelog-writer             claude   ~/code/my-app/.claude/skills/changelog-writer (link)  experiment/changelog-writer/terse (worktree, live, pinned)
 ```
 
-The project link is pinned to `terse`, and the user-level link stays on `main`. The project link is added to `my-app`'s `.git/info/exclude`, so `git status` in `my-app` stays clean.
+The project link is pinned to the experiment, and the user scope link stays on `main`. The project link is added to `my-app`'s `.git/info/exclude`, so `git status` in `my-app` stays clean.
 
-:::caution[Same name at two levels]
-When a user-level skill and a project skill have the same name, Claude Code uses the user-level (personal) one. To make sure the agent in `my-app` loads the draft, remove the user-level link while you compare (`tricks unlink changelog-writer --global`), and compare against `main` in another project instead (`tricks link changelog-writer --to ~/code/other-app`). Run `tricks link changelog-writer` again when you're done.
+:::caution[Same name in two places]
+When a skill in user scope and a project skill have the same name, Claude Code uses the one in user scope (your personal one). To make sure the agent in `my-app` loads the experiment, remove the user scope link while you compare (`tricks unlink changelog-writer --global`), and compare against `main` in another project instead (`tricks link changelog-writer --to ~/code/other-app`). Run `tricks link changelog-writer` again when you're done.
 :::
 
 ## 4. Try it and iterate
@@ -67,49 +69,36 @@ Open the agent in the project and ask for release notes:
 cd ~/code/my-app && claude
 ```
 
-Then edit the draft's `SKILL.md`. The link points into the worktree, so the agent in `my-app` gets what you saved. Start a new session if it has already loaded the skill. Other projects keep getting `main`. Compare the two by running the same prompt in `my-app` and in another project.
+Then edit the experiment's `SKILL.md`. The link points into the worktree, so the agent in `my-app` gets what you saved. Start a new session if it has already loaded the skill. Other projects keep getting `main`. Compare the two by running the same prompt in `my-app` and in another project.
 
 While you're iterating, you can check where each version comes from with `tricks list`:
 
 ```text
 source repo my-skills (~/code/my-skills, branch main)
-  changelog-writer       original · editing on terse · linked: ~/code/my-app (terse), user level (main)
+  changelog-writer       original · experiments: terse · linked: ~/code/my-app (experiment/changelog-writer/terse), user scope (main)
   skill-creator          from anthropics/skills//skills/skill-creator · lint 0E/2W
 ```
 
-## 5. Commit the draft
+## 5. Commit the experiment
 
 ```bash
-tricks edit changelog-writer --commit -m "Terser output"
+tricks experiment commit changelog-writer@terse -m "Terser output"
 ```
 
 ```text
-committed changelog-writer 195438adc on terse
+$ git -C .tricks/work/experiment--changelog-writer--terse add -A
+$ git -C .tricks/work/experiment--changelog-writer--terse commit -q -m 'Terser output'
+committed 43737f7bc on experiment/changelog-writer/terse
 ```
 
-This commits only the skill's folder, on `terse`. Run it as often as you like, like any commit.
-
-## 6. Finish editing
-
-```bash
-tricks edit changelog-writer --done
-tricks list --links
-```
+This commits everything you changed in the worktree, on the experiment's branch. Run it as often as you like, like any commit. The link keeps pointing at the worktree, so nothing changes for the agent. `tricks experiment list` shows how far the experiment has come:
 
 ```text
-~/code/my-skills/.tricks/work/terse/skills/changelog-writer
-finished editing `changelog-writer`; links pinned to terse deploy its last commit
-links on terse:
-  → ~/code/my-app/.claude/skills/changelog-writer (link)
-user level:
-  changelog-writer             claude   ~/.claude/skills/changelog-writer (link)  main (working tree, live)
-~/code/my-app:
-  changelog-writer             claude   ~/code/my-app/.claude/skills/changelog-writer (link)  terse @ 195438a (snapshot, pinned)
+changelog-writer@terse         1 unmerged commit(s) · 1 link(s)
+  ~/code/my-skills/.tricks/work/experiment--changelog-writer--terse/skills/changelog-writer
 ```
 
-The project keeps testing `terse`, now as a read-only snapshot of the branch tip. If you commit more to `terse`, the snapshot follows on the next `tricks` command you run in the source repo.
-
-## 7. Compare the versions
+## 6. Compare the versions
 
 ```bash
 tricks diff changelog-writer head..terse
@@ -126,48 +115,54 @@ tricks diff changelog-writer head..terse
 +3. One line per change, at most 12 words. No preamble.
 ```
 
-## 8a. Keep it: merge
+`terse` is the experiment's name. `diff` finds its branch for you.
+
+## 7a. Keep it: merge
 
 ```bash
-tricks merge changelog-writer@terse
+tricks experiment merge changelog-writer@terse
 tricks list --links
 ```
 
 ```text
-merged changelog-writer from terse into main (73f85f733)
+$ git merge --no-ff --no-commit -q experiment/changelog-writer/terse
+$ git commit -q -m 'Merge experiment changelog-writer@terse'
+$ git worktree remove .tricks/work/experiment--changelog-writer--terse
+$ git branch -d -q experiment/changelog-writer/terse
+merged changelog-writer@terse into main (ac2ac2d5a)
   → ~/code/my-app/.claude/skills/changelog-writer (link)
-  → ~/.claude/skills/changelog-writer (link)
-user level:
+  removed branch experiment/changelog-writer/terse and its worktree
+user scope:
   changelog-writer             claude   ~/.claude/skills/changelog-writer (link)  main (working tree, live)
 ~/code/my-app:
   changelog-writer             claude   ~/code/my-app/.claude/skills/changelog-writer (link)  main (working tree, live)
 ```
 
-`merge` committed only the skill's folder from `terse` onto `main`, and moved the pinned link back to `main`, which now has the change. To open a pull request on your source repo's remote instead, use `--pr`. [Merge it back](/tricks/concepts/branch-experiments/#merge-it-back) covers the options and conflicts.
+`merge` merged the experiment branch into `main` with a regular merge commit, moved the pinned link back to the main checkout, which now has the change, and removed the branch and its worktree. To open a pull request on your source repo's remote instead, use `--pr`. [Merge it back](/tricks/concepts/experiments/#merge-it-back) covers the options and conflicts.
 
-The branch and its worktree are still there. Remove them when you're done. A skill-only merge is applied as a patch, so git needs `-D`:
+## 7b. Drop it: discard
 
-```bash
-git worktree remove .tricks/work/terse
-git branch -D terse
-```
-
-## 8b. Drop it: unlink and delete the branch
-
-If the draft isn't better, remove the project link and the branch. The user-level link never changed.
+If the experiment isn't better, throw it away. The user scope link never changed.
 
 ```bash
-tricks edit changelog-writer --done               # if you're still editing
-tricks unlink changelog-writer --to ~/code/my-app
-git worktree remove .tricks/work/terse
-git branch -D terse
+tricks experiment discard changelog-writer@terse
 ```
 
 ```text
-removed ~/code/my-app/.claude/skills/changelog-writer
+  1 commit(s) not merged into main
+Discard experiment changelog-writer@terse? [y/N]
 ```
 
-`git branch -D` refuses while the worktree still has the branch checked out, so remove the worktree first.
+Confirm, and `discard` removes the worktree and the branch, and moves the project link back to the main checkout:
+
+```text
+$ git worktree remove --force .tricks/work/experiment--changelog-writer--terse
+$ git branch -D -q experiment/changelog-writer/terse
+discarded changelog-writer@terse (branch experiment/changelog-writer/terse)
+  → ~/code/my-app/.claude/skills/changelog-writer (link)
+```
+
+Run `tricks unlink changelog-writer --to ~/code/my-app` if you don't want the skill in that project any more.
 
 ## Test an upstream skill before vendoring it
 
@@ -204,4 +199,4 @@ added webapp-testing at skills/webapp-testing
   not committed yet: review and `git commit` when ready; `tricks link webapp-testing` to try it
 ```
 
-From now on it's a source repo skill: you `link` it, experiment on branches as above, and [merge upstream changes](/tricks/concepts/upstream/) into it.
+From now on it's a source repo skill: you `link` it, start experiments as above, and [merge upstream changes](/tricks/concepts/upstream/) into it.

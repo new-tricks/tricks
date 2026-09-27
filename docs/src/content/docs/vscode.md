@@ -3,7 +3,7 @@ title: VS Code extension
 description: Discover, preview, try, link, experiment, merge upstream changes, lint and publish skills from VS Code, Cursor, Windsurf or VSCodium.
 ---
 
-The New Tricks extension puts the source repo workflow in the editor: a Discover view for finding skills, a Source Repo view for your skills and their branches, a Links view for what your agents load, lint results in the Problems panel, VS Code's own diff and merge editors for upstream changes, and a publish pre-flight panel.
+The New Tricks extension puts the source repo workflow in the editor: a Discover view for finding skills, a Source Repo view for your skills and their experiments, a Links view for what your agents load, lint results in the Problems panel, VS Code's own diff and merge editors for upstream changes, and a publish pre-flight panel.
 
 The extension is a thin client. It runs `tricks serve --stdio` and every action goes through the same core as the CLI, so anything you do in the editor you can also do with [`tricks`](/tricks/reference/commands/), and the other way round.
 
@@ -57,12 +57,13 @@ Each card has four actions:
 
 ### Source Repo
 
-The Source Repo view appears when the workspace has a source repo. It lists your skills with badges: `updating`, `update <ref>`, `customized`, lint errors, `using <branch>`, `editing <branch>`, `uncommitted`, and the number of branches. Clicking a skill opens its `SKILL.md`. Expand a skill to see:
+The Source Repo view appears when the workspace has a source repo. It lists your skills with badges: `updating`, `update <ref>`, `customized`, lint errors, `experiment <name>` (or the number of experiments), `uncommitted`, and the number of branches. Clicking a skill opens its `SKILL.md`. Expand a skill to see:
 
 - Where it came from: its upstream, or `local original`.
 - **upstream has … — update**, when an update is ready, and **continue** or **abort** while an update is in progress.
 - **show changes…** for vendored skills.
-- Each branch of the skill, marked `(in use)` or `(editing)`. Clicking a branch runs **Use Variant…** for it, and its inline button runs **Merge Branch…**.
+- Each experiment of the skill, with **Commit Experiment…** and **Merge Experiment…** inline. Clicking one opens its `SKILL.md`.
+- Each other branch that changed the skill.
 - The number of links.
 
 The title bar has **Refresh**, **Create Skill…**, **Link Source Repo Skills**, **Lint Source Repo** and **Publish…**, plus **Check Upstream Changes** in its menu. Right-click a skill for the rest.
@@ -72,9 +73,9 @@ The title bar has **Refresh**, **Create Skill…**, **Link Source Repo Skills**,
 The Links view shows this source repo's links under **Source repo skills** and all your trials under **Trying**. It's the same information as [`tricks list --links` and `tricks list --trials --all`](/tricks/concepts/links-and-trials/). Each item shows the skill and agent, then where it is, what it deploys, the mode and any health problem:
 
 ```text
-changelog-writer · claude     user-level · main (live) · link
-changelog-writer · claude     my-app · terse (draft, pinned) · link
-changelog-writer · claude     my-app · terse @ 195438a (pinned) · link
+changelog-writer · claude     user scope · main (working tree, live) · link
+changelog-writer · claude     my-app · experiment/changelog-writer/terse (worktree, live, pinned) · link
+changelog-writer · claude     my-app · v0.1.0 @ 94bffc2 (snapshot, pinned) · link
 anthropics/skills//skills/webapp-testing · claude     my-app · link
 ```
 
@@ -82,28 +83,28 @@ An item's inline button unlinks it, or removes it with untry if it's a trial. Th
 
 ## Link to a project
 
-**Link to Project…** (on a skill's context menu) links one skill into a project folder. If the skill has branches, it first asks what the link should deploy:
+**Link to Project…** (on a skill's context menu) links one skill into a project folder. If the skill has experiments or branches, it first asks what the link should deploy:
 
-- **default** follows the skill's default: the working tree, or its `use` variant.
-- A branch pins the link to that branch, like `tricks link <skill>@<branch>`. The branch you're editing is marked `draft (live)` and the others `branch tip`.
+- **main checkout** follows whatever branch the source repo is on, live, like `tricks link <skill>`.
+- An experiment or a branch pins the link to it, like `tricks link <skill>@<name>`.
 
 Then you pick the agents: Claude Code, Codex, GitHub Copilot or Cursor, with Claude Code preselected. **Try in a Project…** asks for a project and agents the same way. If there's exactly one workspace folder besides the source repo, both commands use it without asking. If a skill of the same name is already in the project, you're offered **Shadow**, which backs up the existing skill and restores it when you unlink (`--shadow`). See [What a link deploys](/tricks/concepts/links-and-trials/#what-a-link-deploys).
 
-## Experiment on a branch
+## Experiments
 
-The skill context menu covers [branch experiments](/tricks/concepts/branch-experiments/):
+The skill context menu covers [experiments](/tricks/concepts/experiments/):
 
-- **Experiment on a Branch…** asks for a branch (suggesting the one you're editing, or `draft/<skill>`), checks it out in `.tricks/work/`, and opens the draft's `SKILL.md`. Use **Link to Project…** with that branch to test the draft.
-- **Commit Draft…** commits the draft on its branch (`tricks edit --commit`).
-- **Finish Editing** ends the experiment without merging (`tricks edit --done`).
-- **Use Variant…** picks **default** or a branch, then **Everyone** (`tricks.toml`, committed) or **This machine only** (`tricks.work.toml`).
-- **Merge Branch…** picks a branch, then **Merge \<skill\> only**, **Merge the whole branch**, **Pull request for \<skill\>** or **Pull request for the whole branch**. If a merge stops on conflicts, the extension opens Source Control so you can resolve them and commit.
+- **Start Experiment…** asks for a name, starts `experiment/<skill>/<name>` in `.tricks/work/` (or picks it up), and opens the skill's `SKILL.md` there. Use **Link to Project…** with the experiment to test it.
+- **Commit Experiment…** commits everything changed in the experiment (`tricks experiment commit`).
+- **Merge Experiment…** offers **Merge locally**, **Merge and keep** (the branch and worktree) or **Pull request**. If a merge stops on conflicts, the extension opens Source Control so you can resolve them and `git merge --continue`.
+- **Discard Experiment…** throws it away, after asking if that loses work.
+- **Open Experiment Folder** opens the experiment's worktree in a new window.
 
 ## Upstream changes
 
 - **Check Upstream Changes** fetches every vendored skill's upstream and lists those with changes, with their incoming commits and risk flags. Pick one to update it. The extension also checks in the background every `tricks.checkIntervalMinutes`.
-- **Show Changes…** opens VS Code's diff editor. For a vendored skill you can pick **My customizations** (base to working copy), **Incoming upstream** (base to latest upstream), **Candidate merge** (working copy to merge result, with nothing applied), **Uncommitted** (HEAD to working copy), or **Branch \<name\>** (HEAD to that branch). Local originals offer **Uncommitted** and their branches.
-- **Update from Upstream** runs `tricks update` for one skill. A clean merge is left uncommitted, and **Review in Source Control** takes you there. Your agents keep the previous version until you commit. If there are conflicts, each text conflict opens in the three-way merge editor, with **Yours** and **Upstream** on either side of the base. Then run **Continue Update**, or **Abort Update** to restore your version. Binary and deleted-file conflicts are reported for you to resolve by hand.
+- **Show Changes…** opens VS Code's diff editor. For a vendored skill you can pick **My customizations** (base to working copy), **Incoming upstream** (base to latest upstream), **Candidate merge** (working copy to merge result, with nothing applied), **Uncommitted** (HEAD to working copy), **Experiment \<name\>** (HEAD to that experiment), or **Branch \<name\>** (HEAD to that branch). Local originals offer **Uncommitted**, their experiments and their branches.
+- **Update from Upstream** runs `tricks update` for one skill. A clean merge is left uncommitted, and **Review in Source Control** takes you there. Links to the main checkout load the result straight away. If there are conflicts, each text conflict opens in the three-way merge editor, with **Yours** and **Upstream** on either side of the base. Then run **Continue Update**, or **Abort Update** to restore your version. Binary and deleted-file conflicts are reported for you to resolve by hand.
 - **Contribute Upstream…** offers your change to a vendored skill upstream as a pull request (`tricks contribute`).
 
 See [Upstream tracking](/tricks/concepts/upstream/).
@@ -141,7 +142,7 @@ All commands are in the Command Palette under **New Tricks**.
 | Discover | Search Skills, Preview Skill, Open Supporting File…, Try in a Project…, Vendor into Source Repo |
 | Source repo | Initialize Source Repo Here, Create Skill… (new or from a folder), Remove Skill…, Open SKILL.md |
 | Links | Link Source Repo Skills, Link to Project…, Unlink / Untry, Unlink This Source Repo's Skills, Remove All Trials |
-| Experiments | Experiment on a Branch…, Commit Draft…, Finish Editing, Use Variant…, Merge Branch… |
+| Experiments | Start Experiment…, Commit Experiment…, Merge Experiment…, Discard Experiment…, Open Experiment Folder |
 | Upstream | Check Upstream Changes, Show Changes…, Update from Upstream, Continue Update, Abort Update, Contribute Upstream… |
 | Lint and publish | Lint Source Repo, Lint and Apply Safe Fixes, Publish… |
 | Maintenance | Refresh, Doctor (writes `tricks doctor` output to the **New Tricks** output channel), Status Actions |

@@ -1,9 +1,9 @@
 ---
 title: Work with coding agents
-description: Let Claude Code, Codex, Copilot or Cursor use New Tricks in your source repo, with read-only and branch-only commands pre-approved and everything else left to you.
+description: Let Claude Code, Codex, Copilot or Cursor use New Tricks in your source repo, with read-only and experiment commands pre-approved and everything else left to you.
 ---
 
-Coding agents are good at the tedious parts of skill work: searching for prior art, comparing skills, drafting a tighter description, running lint and fixing what it finds. New Tricks ships an agent skill, `new-tricks`, that teaches them the workflow and draws a clear line: agents may read and draft on branches on their own, but anything that changes what agents load or what the world sees waits for your approval.
+Coding agents are good at the tedious parts of skill work: searching for prior art, comparing skills, drafting a tighter description, running lint and fixing what it finds. New Tricks ships an agent skill, `new-tricks`, that teaches them the workflow and draws a clear line: agents may read and work in experiments on their own, but anything that changes what agents load or what the world sees waits for your approval.
 
 ## 1. Give your agents the skill
 
@@ -32,7 +32,7 @@ npx skills add new-tricks/tricks
 The skill's frontmatter pre-approves a fixed set of commands through `allowed-tools`, for agents that honour it:
 
 ```yaml
-allowed-tools: Bash(tricks search:*) Bash(tricks info:*) Bash(tricks view:*) Bash(tricks lint:*) Bash(tricks list:*) Bash(tricks diff:*) Bash(tricks outdated:*) Bash(tricks edit:*)
+allowed-tools: Bash(tricks search:*) Bash(tricks info:*) Bash(tricks view:*) Bash(tricks lint:*) Bash(tricks list:*) Bash(tricks diff:*) Bash(tricks outdated:*) Bash(tricks experiment start:*) Bash(tricks experiment list:*) Bash(tricks experiment commit:*)
 ```
 
 | Command | Why it's safe without asking |
@@ -40,9 +40,10 @@ allowed-tools: Bash(tricks search:*) Bash(tricks info:*) Bash(tricks view:*) Bas
 | `search`, `info`, `view` | read catalogs and skill content; nothing runs |
 | `list`, `diff`, `outdated` | read the source repo's state; `outdated` fetches upstreams but changes nothing |
 | `lint` | reports problems |
-| `edit` | drafts on a branch, in `.tricks/work/<branch>/`, which no agent loads until you link it |
+| `experiment start`, `experiment list` | start an experiment on its own branch, in `.tricks/work/`, which no agent loads until you link it |
+| `experiment commit` | commits in the experiment's worktree, on its branch only |
 
-`tricks edit <skill> --commit -m "…"` commits the draft, and only on the branch being edited, so an agent can iterate on a draft without prompts while your main checkout, and every agent loading from it, stays untouched. See [Branch experiments](/tricks/concepts/branch-experiments/).
+So an agent can iterate on an experiment without prompts while your main checkout, and every agent loading from it, stays untouched. Merging or discarding an experiment is yours to decide: the skill tells agents not to run `experiment merge` or `experiment discard` unless you ask. See [Experiments](/tricks/concepts/experiments/).
 
 :::caution
 `Bash(tricks lint:*)` also matches `tricks lint --fix`, which rewrites files in your working tree (whitespace, line endings, name casing). The changes are uncommitted and easy to review with `git diff`, but they are not confined to a branch.
@@ -55,11 +56,13 @@ These commands are not pre-approved, so they go through your agent's normal perm
 | Command | What it changes |
 |---|---|
 | `vendor`, `create`, `remove` | which skills your source repo contains |
-| `link`, `unlink`, `try`, `untry`, `use` | which skills and versions agents load |
-| `merge`, `update` | your main branch and vendored skills |
+| `link`, `unlink`, `try`, `untry` | which skills and versions agents load |
+| `experiment merge`, `experiment discard`, `update` | your main branch, your experiments and vendored skills |
 | `publish`, `contribute` | what other people see |
 
-The skill tells agents to propose these, explain why, and wait. A typical exchange: the agent drafts a change on `terse`, lints it, and asks you to run `tricks link changelog-writer@terse --to ~/code/my-app` so you can compare the draft with real use, then later proposes `tricks merge changelog-writer@terse`.
+The skill tells agents to propose these, explain why, and wait. A typical exchange: the agent starts the experiment `changelog-writer@terse`, makes and commits a change there, lints it, and asks you to run `tricks link changelog-writer@terse --to ~/code/my-app` so you can compare it with real use, then later proposes `tricks experiment merge changelog-writer@terse`.
+
+Every git command that changes a repository is printed on stderr as `$ git …`, so you can see in the agent's output what it did to your repos.
 
 When a command needs confirmation, New Tricks never assumes yes in a non-interactive shell. It fails and says what it wanted to confirm; with `--json` the error has `"kind": "confirmation_required"`:
 
@@ -82,10 +85,10 @@ New Tricks helps you check before you say yes:
 
 ## 5. Tell agent commits from yours
 
-When New Tricks commits on your behalf (`edit --commit` and `merge`) and detects that a coding agent is running it, it adds a `Tricks-Agent:` trailer:
+When New Tricks commits on your behalf (`experiment commit` and `experiment merge`) and detects that a coding agent is running it, it adds a `Tricks-Agent:` trailer:
 
 ```text
-committed changelog-writer 4f7f5d139 on terse (Tricks-Agent: claude-code)
+committed 4f7f5d139 on experiment/changelog-writer/terse (Tricks-Agent: claude-code)
 ```
 
 ```text
@@ -137,11 +140,11 @@ tricks search skill creator --limit 1 --json
 ]
 ```
 
-Useful ones for agents: `tricks list --json` (skills, upstream state, branches, lint counts), `tricks lint --json` (every finding, with a `fixable` flag), `tricks info <skill> --json`, and `tricks view <skill> --json` (`{skill, path, content}`). Errors are `{"error": "…", "kind": "error"}` with a non-zero exit status. In `--json` or non-interactive mode, an ambiguous bare skill name fails with the candidates instead of prompting.
+Useful ones for agents: `tricks list --json` (skills, upstream state, experiments, branches, lint counts), `tricks experiment list --json`, `tricks lint --json` (every finding, with a `fixable` flag), `tricks info <skill> --json`, and `tricks view <skill> --json` (`{skill, path, content}`). Errors are `{"error": "…", "kind": "error"}` with a non-zero exit status. In `--json` or non-interactive mode, an ambiguous bare skill name fails with the candidates instead of prompting.
 
 ## 7. Status line
 
-`tricks statusline` prints a one-line summary for an agent's status line, such as `tricks: editing 1 · 1 link`, or nothing when there is nothing to report. It reads cached state only and never touches the network, so it can't slow a prompt down.
+`tricks statusline` prints a one-line summary for an agent's status line, such as `tricks: 1 experiment · 6 links`, or nothing when there is nothing to report. It reads cached state only and never touches the network, so it can't slow a prompt down.
 
 ## The VS Code extension's server
 

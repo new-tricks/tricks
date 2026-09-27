@@ -11,7 +11,7 @@ export async function run(): Promise<void> {
   const api: any = await ext!.activate();
   // Commands are registered.
   const cmds = await vscode.commands.getCommands(true);
-  for (const c of ["tricks.search", "tricks.update", "tricks.mergeBranch", "tricks.commitDraft", "tricks.createSkill", "tricks.removeSkill", "tricks.publish", "tricks.changes", "tricks.linkAll", "tricks.linkToProject", "tricks.try", "tricks.editDone"]) {
+  for (const c of ["tricks.search", "tricks.update", "tricks.experimentStart", "tricks.experimentCommit", "tricks.experimentMerge", "tricks.experimentDiscard", "tricks.experimentOpenFolder", "tricks.createSkill", "tricks.removeSkill", "tricks.publish", "tricks.changes", "tricks.linkAll", "tricks.linkToProject", "tricks.try"]) {
     assert.ok(cmds.includes(c), `missing command ${c}`);
   }
   // Status via the real binary over JSON-RPC.
@@ -37,23 +37,36 @@ export async function run(): Promise<void> {
   // Status bar reflects lint state.
   assert.ok(String(api.status.text).length > 0);
 
-  // Link the source repo's skills for the agents, then remove the links again.
+  // Confirmations the core asks for are answered yes, and recorded.
+  const prompts: string[] = [];
+  api.client.confirm = async (prompt: string) => {
+    prompts.push(prompt);
+    return true;
+  };
+
+  // Link the source repo's skills for the agents, then remove the links again (removing
+  // more than one asks first).
   await vscode.commands.executeCommand("tricks.linkAll");
   const linked = api.model.status.links;
   assert.ok(linked.length >= 2 && linked.every((l: any) => l.kind === "dev" && l.scope === "global"), JSON.stringify(linked));
   await vscode.commands.executeCommand("tricks.unlinkAll");
   assert.strictEqual(api.model.status.links.length, 0);
+  assert.strictEqual(prompts.length, 1, "unlinking all asks for confirmation once");
 
-  // Experiment on a branch, commit the draft, merge the skill back (the RPC calls the
-  // Commit Draft… and Merge Branch… commands make).
-  const ed = await api.client.request("sourceRepo/edit", { skill: "hello", branch: "polish" });
-  fs.writeFileSync(path.join(ed.path, "SKILL.md"), fs.readFileSync(path.join(ed.path, "SKILL.md"), "utf8") + "\nPolished.\n");
-  const draft = await api.client.request("sourceRepo/edit", { skill: "hello", commit: true, message: "polish hello" });
-  assert.strictEqual(draft.branch, "polish", JSON.stringify(draft));
-  const merged = await api.client.request("sourceRepo/merge", { spec: "hello@polish", wholeBranch: false, pr: false });
-  assert.ok(merged.commit && merged.mode === "skill", JSON.stringify(merged));
+  // Start an experiment, commit it and merge it back (the RPC calls Start Experiment…,
+  // Commit Experiment… and Merge Experiment… make).
+  const exp = await api.client.request("experiment/start", { spec: "hello@polish" });
+  assert.strictEqual(exp.branch, "experiment/hello/polish", JSON.stringify(exp));
+  fs.writeFileSync(path.join(exp.path, "SKILL.md"), fs.readFileSync(path.join(exp.path, "SKILL.md"), "utf8") + "\nPolished.\n");
+  await api.refreshAll();
+  assert.deepStrictEqual(api.model.skill("hello").experiments, ["polish"]);
+  const committed = await api.client.request("experiment/commit", { spec: "hello@polish", message: "polish hello" });
+  assert.ok(committed.commit && committed.branch === "experiment/hello/polish", JSON.stringify(committed));
+  const merged = await api.client.request("experiment/merge", { spec: "hello@polish" });
+  assert.ok(merged.commit && merged.into === "main" && merged.cleaned_up && !merged.conflicts.length, JSON.stringify(merged));
   assert.ok(fs.readFileSync(path.join(st.source_repo.root, "skills/hello/SKILL.md"), "utf8").includes("Polished."));
   await api.refreshAll();
+  assert.deepStrictEqual(api.model.skill("hello").experiments, []);
 
   // Discover: messages from the webview go through the real core.
   const posts: any[] = [];
@@ -75,11 +88,7 @@ export async function run(): Promise<void> {
 
   // Publish: the pre-flight panel opens with the core's report, and publishing from it
   // goes through the core's confirmation and pushes to the target repository.
-  const prompts: string[] = [];
-  api.client.confirm = async (prompt: string) => {
-    prompts.push(prompt);
-    return true;
-  };
+  prompts.length = 0;
   await vscode.commands.executeCommand("tricks.publish");
   const panel = api.PublishPanel.current;
   assert.ok(panel, "publish panel did not open");

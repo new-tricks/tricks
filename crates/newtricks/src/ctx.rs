@@ -142,7 +142,11 @@ impl Ctx {
         paths.ensure()?;
         let cfg = paths.user_config();
         if !cfg.exists() {
-            crate::config::write_atomic(&cfg, crate::config::initial_user_config().as_bytes())?;
+            let mut found: Vec<&str> = crate::agents::detect(&paths.home).iter().map(|a| a.id).collect();
+            if found.is_empty() {
+                found.push("claude");
+            }
+            crate::config::write_atomic(&cfg, crate::config::initial_user_config(&found).as_bytes())?;
         }
         let state = State::open(&paths.state_db())?;
         let gh = GitHub::new(opts.offline);

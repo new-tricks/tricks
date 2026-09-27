@@ -29,7 +29,7 @@ Extract PDF Text  clawhub.ai/ivangdavila/skills//extract-pdf-text
 
 Each result shows the name and [skill identifier](#skill-identifiers), the start of the description, and a tag line: trust (`yours`, `org`, `official`, `starred` or `unknown`), licence class, installs, repository stars, and Tessl's quality score where Tessl lists it. After the tags come the number of catalogs listing the skill, identical copies, variants, and the risk surface: `scripts`, `allowed-tools` (or `broad allowed-tools`), `network references`, and any catalog security flags.
 
-Every term must match, and the last term matches as a prefix. Results rank by text relevance (name first, then description, then body), weighted by trust, popularity and freshness. An empty query lists everything in the index.
+Every term must match, and the last term matches as a prefix. By default, results rank by text relevance (name first, then description, then body), weighted by trust, popularity and freshness. `--sort` picks another order: `installs`, `stars`, `updated` or `name` (`relevance` is the default). An empty query lists everything in the index.
 
 ### Filters
 
@@ -41,7 +41,9 @@ Every term must match, and the last term matches as a prefix. Results rank by te
 | `--agent <agent>` | skills that declare support for this agent (`claude`, `codex`, `copilot`, `cursor`) |
 | `--owner <owner>` | skills from this owner's repositories |
 | `--catalog <catalog>` | skills listed in this catalog, or from this repository |
-| `--category <category>` | skills in this catalog category |
+| `--category <category>` | skills in this catalog category (see [Facets](#facets)) |
+| `--min-installs <n>` | skills with at least `n` installs |
+| `--min-stars <n>` | skills whose repository has at least `n` stars |
 | `--limit <n>` | at most `n` results (default 20) |
 | `--no-live` | skip the live catalogs for this search |
 | `--refresh` | re-index every catalog first |
@@ -51,6 +53,31 @@ Trust comes from the owner: your GitHub login is `yours`, your organizations are
 :::note
 The licence class in search results is a quick estimate from frontmatter and repository metadata. A skill that keeps its licence in a `LICENSE.txt` file can show `licence:unknown` in search. `tricks info` runs the full detection, and that is what `vendor` and `publish` use.
 :::
+
+### Facets
+
+`--facets` shows how the matches spread instead of listing them: how many skills match, then counts per category, catalog, owner, licence class and trust level.
+
+```bash
+tricks search pdf --facets
+```
+
+```text
+107 matching skill(s)
+categories:
+   25  finance
+   …
+catalogs:
+   …
+owners:
+   …
+licence:
+   …
+trust:
+   …
+```
+
+Filters apply first, so you can narrow a search step by step. Categories aren't unified across catalogs: each catalog uses its own, taken from the plugin categories of its marketplace, so `--facets` is how you find the names `--category` accepts. With `--json --facets`, the output is `{total, facets}`, where `facets` has `categories`, `catalogs`, `owners`, `license` and `trust`, each a list of `[value, count]` pairs, most common first.
 
 ### Identical copies and variants
 

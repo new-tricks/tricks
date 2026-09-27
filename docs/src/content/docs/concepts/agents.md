@@ -3,11 +3,11 @@ title: Agents
 description: Which coding agents New Tricks links skills for, where each one looks for skills, and when a link becomes a copy.
 ---
 
-When you [link or try](/tricks/concepts/links-and-trials/) a skill, New Tricks places it in the primary skill directory of each agent you select: the user-level directory by default for `link`, the project's directory for `try` and `--to`. It supports four agents.
+When you [link or try](/tricks/concepts/links-and-trials/) a skill, New Tricks places it in the primary skill directory of each agent you select: its user scope directory by default for `link`, the project's directory for `try` and `--to`. It supports four agents.
 
 ## Where skills go
 
-| Agent | ID | User-level directory | Project directory | Also reads (user level) | Follows links |
+| Agent | ID | User scope directory | Project directory | Also reads (user scope) | Follows links |
 |---|---|---|---|---|---|
 | Claude Code | `claude` | `~/.claude/skills/` | `.claude/skills/` | Nothing else (it doesn't read `.agents/skills`) | Yes |
 | Codex | `codex` | `~/.agents/skills/` | `.agents/skills/` | `~/.codex/skills/` (deprecated), `/etc/codex/skills` | Yes, in user, repo and admin scope |
@@ -16,7 +16,19 @@ When you [link or try](/tricks/concepts/links-and-trials/) a skill, New Tricks p
 
 Claude Code and Codex look for project skills from the current directory up to the repository root. Cursor searches project directories recursively.
 
-New Tricks places a skill only in the primary directory of each agent you select. It doesn't try to stop other agents from seeing it: because Cursor and Copilot also read `~/.claude/skills/`, a user-level link for Claude Code shows up in them too. That's usually what you want when testing. When the same skill reaches an agent through more than one directory, the agent may show it twice. Copilot is known to list skills twice when directories link to each other.
+In a project, New Tricks places a skill in the primary directory of each agent you select. It doesn't try to stop other agents from seeing it. When the same skill reaches an agent through more than one directory, the agent may show it twice. Copilot is known to list skills twice when directories link to each other.
+
+In user scope, New Tricks places each skill in the fewest directories that reach every agent you selected, so no agent loads it twice. An agent that also reads another selected agent's directory, and can load what is placed there (it follows the link, or the skill is a copy), isn't linked separately:
+
+```text
+cursor loads user-scope skills from ~/.claude/skills and ~/.agents/skills, so it is not linked separately
+linked changelog-writer into user scope from main (working tree, live)
+  claude   ~/.claude/skills/changelog-writer (link)
+  codex    ~/.agents/skills/changelog-writer (link)
+  copilot  ~/.copilot/skills/changelog-writer (copy)
+```
+
+With all four agents selected, that means Claude Code, Codex and Copilot. Copilot reads `~/.claude/skills/` too, but it can't load linked skills, so on macOS and Linux it keeps its own copy in `~/.copilot/skills/`. Agents you name with `--agents` are always placed in their own directory.
 
 The `copilot` integration serves both Copilot in VS Code and the Copilot CLI.
 
@@ -48,11 +60,11 @@ Without `--agents`, New Tricks uses:
    agents = ["claude", "codex"]
    ```
 
-2. Otherwise, the `agents` setting in your user config (`~/.config/newtricks/tricks.toml`), which is `["claude"]` by default:
+2. Otherwise, the `agents` setting in your user config (`~/.config/newtricks/tricks.toml`). When New Tricks first writes that file, it lists the agents it finds on your machine: their directories (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.copilot`), a Copilot extension in VS Code, or `claude`, `codex`, `cursor`, `cursor-agent` or `copilot` on your `PATH`. If it finds none, it writes `["claude"]`:
 
    ```toml
    [settings]
-   agents = ["claude"]      # agents to link skills for (a source repo can set its own)
+   agents = ["claude", "codex", "cursor"]   # agents to link skills for, found on first run (a source repo can set its own)
    ```
 
 See [Configuration](/tricks/reference/configuration/) for both files.
@@ -70,9 +82,9 @@ Each agent declares whether it follows directory links on each platform. Where i
 
 - **Windows** uses copies for every agent, because linked skill directories fail to load there (for example [anthropics/claude-code#41177](https://github.com/anthropics/claude-code/issues/41177)).
 - **Copilot** always gets a copy until microsoft/vscode#315979 is fixed.
-- **Cursor on Linux** skips hidden dot-directories during discovery. When any directory in the link's target path starts with `.`, Cursor gets a copy instead. That includes the store under `~/.local/share/newtricks/` and drafts under `.tricks/work/`. On macOS and Windows the data directory isn't hidden.
+- **Cursor on Linux** skips hidden dot-directories during discovery. When any directory in the link's target path starts with `.`, Cursor gets a copy instead. That includes the store under `~/.local/share/newtricks/` and worktrees under `.tricks/work/`. On macOS and Windows the data directory isn't hidden.
 
-A copy of a live target, such as your working tree or a draft, doesn't follow your edits. Run `tricks link` again to refresh it. You can also force copies for every agent with `--copy`.
+A copy of a live target, such as your main checkout or an experiment, doesn't follow your edits. Run `tricks link` again to refresh it. You can also force copies for every agent with `--copy`.
 
 ### Override with `TRICKS_LINK_MODE`
 
@@ -88,10 +100,10 @@ Per-agent entries use the agent IDs from the table above.
 
 ## Check your setup with `tricks doctor`
 
-[`tricks doctor`](/tricks/reference/commands/doctor/) reports each agent's directories, whether the user-level directory exists yet, the mode links into the store get on this machine, and the agent version the integration was tested against:
+[`tricks doctor`](/tricks/reference/commands/doctor/) reports each agent's directories, whether the user scope directory exists yet, the mode links into the store get on this machine, and the agent version the integration was tested against:
 
 ```text
-New Tricks 0.6.0
+New Tricks 0.7.0
   ✓ git                      git version 2.55.0
   ✓ gh                       GitHub CLI found
   ✗ github.com credentials   anonymous: public sources only, 60 API requests/hour, no GitHub code search. Run `gh auth login`.

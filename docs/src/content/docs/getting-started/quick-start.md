@@ -1,11 +1,11 @@
 ---
 title: Quick start
-description: A ten-minute walk-through from searching for a skill to testing your own skill and a branch experiment with real agents.
+description: A ten-minute walk-through from searching for a skill to testing your own skill and an experiment with real agents.
 ---
 
 This walk-through takes you through the core loop with a small example: a source repo `~/code/my-skills` holding your own `changelog-writer` skill and a vendored copy of Anthropic's `skill-creator`, tested in a project `~/code/my-app`. The output shown is real, lightly trimmed; `tricks` prints full paths where this page shows `~`.
 
-You need `tricks` [installed](/tricks/getting-started/installation/) and, ideally, GitHub credentials (`gh auth login`). Agents default to Claude Code; see [Agents](/tricks/concepts/agents/) to add Codex, Cursor or Copilot.
+You need `tricks` [installed](/tricks/getting-started/installation/) and, ideally, GitHub credentials (`gh auth login`). New Tricks links skills for the agents it finds on your machine the first time it runs; the examples here use Claude Code. See [Agents](/tricks/concepts/agents/) to choose others.
 
 ## 1. Find and try a skill
 
@@ -127,16 +127,16 @@ source repo my-skills (~/code/my-skills, branch main)
 
 ## 5. Link the skills to your agents
 
-[`tricks link`](/tricks/reference/commands/link/) with no skill links every skill in the repo into the user-level agent directories, in dev mode: the agent reads your working tree, so edits are live.
+[`tricks link`](/tricks/reference/commands/link/) with no skill links every skill in the repo into user scope, the agents' directories in your home. The agent reads your main checkout, so edits are live.
 
 ```bash
 tricks link
 ```
 
 ```text
-linked changelog-writer into the user-level agent directories from main (working tree, live)
+linked changelog-writer into user scope from main (working tree, live)
   claude   ~/.claude/skills/changelog-writer (link)
-linked skill-creator into the user-level agent directories from main (working tree, live)
+linked skill-creator into user scope from main (working tree, live)
   claude   ~/.claude/skills/skill-creator (link)
 see links with `tricks list --links`; remove them with `tricks unlink`
 ```
@@ -154,21 +154,23 @@ skill-creator -> /Users/you/code/my-skills/skills/skill-creator
 
 Start a new Claude Code session anywhere and ask for release notes: it loads `changelog-writer`.
 
-## 6. Experiment on a branch
+## 6. Start an experiment
 
-Try a terser style without touching the version your agents use now. [`tricks edit`](/tricks/reference/commands/edit/) checks the skill out on a branch, in a worktree inside the repo:
+Try a terser style without touching the version your agents use now. [`tricks experiment start`](/tricks/reference/commands/experiment/) puts the skill on a branch of its own, `experiment/changelog-writer/terse`, in a worktree inside the repo:
 
 ```bash
-tricks edit changelog-writer -b terse
+tricks experiment start changelog-writer@terse
 ```
 
 ```text
-~/code/my-skills/.tricks/work/terse/skills/changelog-writer
-editing `changelog-writer` on branch terse (`cd "$(tricks edit changelog-writer)"` or `--shell` to work there); commit drafts with `tricks edit changelog-writer --commit -m "…"`, then `tricks merge changelog-writer@terse`
-to try the draft with agents: `tricks link changelog-writer@terse`
+$ git worktree add -q -b experiment/changelog-writer/terse .tricks/work/experiment--changelog-writer--terse HEAD
+~/code/my-skills/.tricks/work/experiment--changelog-writer--terse/skills/changelog-writer
+experiment changelog-writer@terse on branch experiment/changelog-writer/terse (`cd "$(tricks experiment start changelog-writer@terse)"` or `--shell` to work there)
+  try it with agents: `tricks link changelog-writer@terse --to <project>`; commit with `tricks experiment commit changelog-writer@terse -m "…"`
+  then `tricks experiment merge changelog-writer@terse` (or `--pr`), or `tricks experiment discard changelog-writer@terse`
 ```
 
-Edit the draft's `SKILL.md` at that path. Then link the draft into one project only, so you can compare it with the version everywhere else:
+The `$` line is the git command New Tricks ran for you. Edit the `SKILL.md` at the printed path. Then link the experiment into one project only, so you can compare it with the version everywhere else:
 
 ```bash
 tricks link changelog-writer@terse --to ~/code/my-app
@@ -176,23 +178,25 @@ tricks list
 ```
 
 ```text
-linked changelog-writer into ~/code/my-app from terse (draft, live, pinned)
+linked changelog-writer into ~/code/my-app from experiment/changelog-writer/terse (worktree, live, pinned)
   claude   ~/code/my-app/.claude/skills/changelog-writer (link)
 see links with `tricks list --links`; remove with `tricks unlink changelog-writer`
 source repo my-skills (~/code/my-skills, branch main)
-  changelog-writer       original · editing on terse · linked: ~/code/my-app (terse), user level (main)
-  skill-creator          from anthropics/skills//skills/skill-creator · lint 0E/2W · linked: user level (main)
+  changelog-writer       original · experiments: terse · linked: ~/code/my-app (experiment/changelog-writer/terse), user scope (main)
+  skill-creator          from anthropics/skills//skills/skill-creator · lint 0E/2W · linked: user scope (main)
 ```
 
-Agents working in `~/code/my-app` now load the draft; agents everywhere else still load `main`. When you like the result, commit the draft on its branch and compare:
+Agents working in `~/code/my-app` now load the experiment; agents everywhere else still load `main`. When you like the result, commit it and compare:
 
 ```bash
-tricks edit changelog-writer --commit -m "Terser changelog lines"
+tricks experiment commit changelog-writer@terse -m "Terser changelog lines"
 tricks diff changelog-writer head..terse
 ```
 
 ```text
-committed changelog-writer 121c5691f on terse
+$ git -C .tricks/work/experiment--changelog-writer--terse add -A
+$ git -C .tricks/work/experiment--changelog-writer--terse commit -q -m 'Terser changelog lines'
+committed 121c5691f on experiment/changelog-writer/terse
 --- head/changelog-writer/SKILL.md
 +++ terse/changelog-writer/SKILL.md
 @@ -10,7 +10,8 @@
@@ -204,21 +208,27 @@ committed changelog-writer 121c5691f on terse
 +5. Leave out internal refactors and dependency bumps.
 ```
 
-More in [Branch experiments](/tricks/concepts/branch-experiments/).
+More in [Experiments](/tricks/concepts/experiments/).
 
 ## 7. Merge it back
 
-[`tricks merge`](/tricks/reference/commands/merge/) brings only the skill's folder back from the branch, as one commit. Links pinned to the branch return to following `main`, which now has the change:
+[`tricks experiment merge`](/tricks/reference/commands/experiment/) merges the experiment into `main` with a regular merge commit. Links pinned to it return to following the main checkout, which now has the change, and the experiment's branch and worktree are removed:
 
 ```bash
-tricks merge changelog-writer@terse
+tricks experiment merge changelog-writer@terse
 ```
 
 ```text
-merged changelog-writer from terse into main (5c8ca90e3)
+$ git merge --no-ff --no-commit -q experiment/changelog-writer/terse
+$ git commit -q -m 'Merge experiment changelog-writer@terse'
+$ git worktree remove .tricks/work/experiment--changelog-writer--terse
+$ git branch -d -q experiment/changelog-writer/terse
+merged changelog-writer@terse into main (5c8ca90e3)
   → ~/code/my-app/.claude/skills/changelog-writer (link)
-  → ~/.claude/skills/changelog-writer (link)
+  removed branch experiment/changelog-writer/terse and its worktree
 ```
+
+If you'd rather not keep it, `tricks experiment discard changelog-writer@terse` throws it away instead.
 
 ## 8. Lint
 

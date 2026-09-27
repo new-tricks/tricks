@@ -104,7 +104,7 @@ tricks link skill-creator --to ~/code/my-app          # test your version with a
 git add -A && git commit -m "Point skill-creator at our house style"
 ```
 
-For larger changes, experiment on a branch with `tricks edit skill-creator -b <branch>` and link the draft into one project; see [Branch experiments](/tricks/concepts/branch-experiments/).
+For larger changes, start an experiment with `tricks experiment start skill-creator@<name>` and link it into one project; see [Experiments](/tricks/concepts/experiments/).
 
 Check what you changed relative to upstream at any time:
 
@@ -166,7 +166,7 @@ merged       skill-creator → main
     updated  scripts/check_links.py
     risk     + script scripts/check_links.py
     risk     +1 URL(s): https://agentskills.io/specification
-    merged into the working tree (uncommitted); review with `git diff` and commit — agents keep the previous version until then
+    merged into the working tree (uncommitted); review with `git diff` and commit (links to the main checkout already load it)
 ```
 
 Your house-style line and upstream's changes are both in the file. Review with `git diff`, then commit:
@@ -176,7 +176,7 @@ git diff
 git add -A && git commit -m "Update skill-creator from upstream"
 ```
 
-Until you commit, the link in `~/code/my-app` keeps serving your last committed version; after the commit, the next `tricks` command puts it back on your working tree.
+The link in `~/code/my-app` follows your main checkout, so the agent there loaded the merged version as soon as `update` wrote it. You can try it with the agent before you commit.
 
 ## 8. Resolve a conflict
 

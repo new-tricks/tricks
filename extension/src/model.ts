@@ -12,9 +12,10 @@ export interface RepoSkill {
   license: { spdx: string | null; class: string } | null;
   lint_errors: number;
   lint_warnings: number;
+  /** Other branches (not experiments) that change the skill. */
   branches: string[];
-  variant: string | null;
-  editing: string | null;
+  /** Names of the skill's experiments (branches `experiment/<skill>/<name>`). */
+  experiments: string[];
   merge_in_progress: boolean;
   dev_links: number;
   uncommitted: boolean;
@@ -37,11 +38,11 @@ export interface LinkInfo {
   mode: string;
   kind: "dev" | "trial";
   health: string;
-  /** Source repo skills: the branch the link deploys, and whether it is pinned to it (`link <skill>@<branch>`). */
+  /** Source repo skills: the branch the link deploys, and whether it is pinned to it (`link <skill>@<ref>`). */
   branch?: string | null;
   pinned?: boolean;
-  /** Source repo skills: where the link points. */
-  source?: "working-tree" | "draft" | "snapshot" | null;
+  /** Source repo skills: the main checkout, another checkout of a branch, or a frozen commit. */
+  source?: "working-tree" | "worktree" | "snapshot" | null;
   commit?: string | null;
 }
 
@@ -54,6 +55,23 @@ export interface Status {
   trials: LinkInfo[];
   repos: { name: string; root: string; skills: number }[];
   unfinished_operations: string[];
+}
+
+/** `experiment/list`: an experiment on branch `experiment/<skill>/<name>`. */
+export interface Experiment {
+  skill: string;
+  name: string;
+  branch: string;
+  /** The experiment's checkout, and the skill's folder in it. */
+  worktree: string | null;
+  path: string | null;
+  /** Commits not yet on the branch the source repo is on. */
+  ahead: number;
+  uncommitted: boolean;
+  /** Links pinned to the experiment. */
+  links: string[];
+  pr: string | null;
+  pr_state: string | null;
 }
 
 /** Shared status model; trees and the status bar render from it. */

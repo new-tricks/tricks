@@ -1,6 +1,6 @@
 // Plain-Node tests for the framing layer (no VS Code needed): `npm test`.
 import * as assert from "assert";
-import { MessageReader, encode } from "../protocol";
+import { CONFIRMATION_REQUIRED, MessageReader, RpcFailure, encode } from "../protocol";
 
 const got: any[] = [];
 const r = new MessageReader((m) => got.push(m));
@@ -12,4 +12,8 @@ for (let i = 0; i < both.length; i += 7) r.push(both.subarray(i, i + 7));
 assert.strictEqual(got.length, 2);
 assert.strictEqual(got[0].id, 1);
 assert.strictEqual(got[1].result.text, "héllo ✓");
+// Confirmation errors (unlink/untry of several links, experiment/discard) are recognised.
+const confirm = new RpcFailure({ code: CONFIRMATION_REQUIRED, message: "confirmation required", data: { prompt: "Discard pdf@terse?", details: ["2 commit(s) not merged into main"] } });
+assert.ok(confirm.needsConfirmation);
+assert.ok(!new RpcFailure({ code: -32603, message: "boom" }).needsConfirmation);
 console.log("protocol tests passed");

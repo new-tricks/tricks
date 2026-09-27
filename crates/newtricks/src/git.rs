@@ -8,13 +8,80 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU8, Ordering};
 
+/// Which commands are echoed to stderr as `$ git …`: 0 none, 1 the ones that change a
+/// repository (`run`), 2 every command (`--verbose`).
+static ECHO: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_echo(level: u8) {
+    ECHO.store(level, Ordering::Relaxed);
+}
+
+/// Print a command the way you could run it yourself: `$ git -C <dir> <args>` (no `-C`
+/// when `dir` is the current directory). Paths under the current directory are shown
+/// relative to it, others under home with `~`.
+pub fn echo(dir: &Path, program: &str, args: &[&str], min: u8) {
+    if ECHO.load(Ordering::Relaxed) < min {
+        return;
+    }
+    let here = std::env::current_dir().ok().and_then(|d| crate::paths::canon(&d).ok());
+    let there = crate::paths::canon(dir).unwrap_or(dir.to_path_buf());
+    let show = |p: &Path| -> String {
+        if let Some(rel) = here.as_deref().and_then(|h| p.strip_prefix(h).ok()) {
+            return if rel.as_os_str().is_empty() { ".".into() } else { rel.display().to_string() };
+        }
+        match std::env::var_os("HOME").map(PathBuf::from) {
+            Some(h) if p.starts_with(&h) => format!("~/{}", p.strip_prefix(&h).unwrap().display()),
+            _ => p.display().to_string(),
+        }
+    };
+    let mut line = format!("$ {program}");
+    let elsewhere = here.as_deref() != Some(there.as_path());
+    if elsewhere && program == "git" {
+        line.push_str(" -C ");
+        line.push_str(&shell_quote(&show(&there)));
+    }
+    for a in args {
+        let p = Path::new(a);
+        let a = if p.is_absolute() { show(&crate::paths::canon(p).unwrap_or(p.to_path_buf())) } else { a.to_string() };
+        line.push(' ');
+        line.push_str(&shell_quote(&a));
+    }
+    if elsewhere && program != "git" {
+        line.push_str(&format!("   (in {})", show(&there)));
+    }
+    eprintln!("{line}");
+}
+
+fn shell_quote(s: &str) -> String {
+    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:=@%+,~^{}".contains(c)) {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
+/// A git command that changes a repository you work with (commit, branch, worktree,
+/// merge, push): echoed by default so you can see, repeat or undo what New Tricks did.
+pub fn run(dir: &Path, args: &[&str]) -> Result<String> {
+    echo(dir, "git", args, 1);
+    let out = exec(dir, args)?;
+    Ok(String::from_utf8_lossy(&out).trim_end().to_string())
+}
+
+/// A read-only or internal git command (echoed only with `--verbose`).
 pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = git_raw(dir, args)?;
     Ok(String::from_utf8_lossy(&out).trim_end().to_string())
 }
 
 pub fn git_raw(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    echo(dir, "git", args, 2);
+    exec(dir, args)
+}
+
+fn exec(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let o = Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -29,6 +96,7 @@ pub fn git_raw(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
 }
 
 pub fn git_ok(dir: &Path, args: &[&str]) -> bool {
+    echo(dir, "git", args, 2);
     Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -42,6 +110,7 @@ pub fn git_ok(dir: &Path, args: &[&str]) -> bool {
 }
 
 pub fn git_with_input(dir: &Path, args: &[&str], input: &[u8]) -> Result<String> {
+    echo(dir, "git", args, 2);
     let mut child =
         Command::new("git").args(args).current_dir(dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     child.stdin.take().unwrap().write_all(input)?;
@@ -278,4 +347,41 @@ pub fn head_commit(dir: &Path) -> Result<String> {
 
 pub fn current_branch(dir: &Path) -> Option<String> {
     git(dir, &["symbolic-ref", "--short", "HEAD"]).ok()
+}
+
+pub fn branch_exists(dir: &Path, branch: &str) -> bool {
+    git_ok(dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])
+}
+
+/// Checkouts of the repository at `dir`: (path, branch), the main checkout first.
+pub fn worktrees(dir: &Path) -> Vec<(PathBuf, Option<String>)> {
+    let out = git(dir, &["worktree", "list", "--porcelain"]).unwrap_or_default();
+    let mut v: Vec<(PathBuf, Option<String>)> = Vec::new();
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            let p = PathBuf::from(p);
+            v.push((crate::paths::canon(&p).unwrap_or(p), None));
+        } else if let Some(b) = line.strip_prefix("branch refs/heads/")
+            && let Some(last) = v.last_mut()
+        {
+            last.1 = Some(b.to_string());
+        }
+    }
+    v
+}
+
+/// Where `branch` is checked out, if anywhere.
+pub fn checkout_of(dir: &Path, branch: &str) -> Option<PathBuf> {
+    worktrees(dir).into_iter().find(|(_, b)| b.as_deref() == Some(branch)).map(|(p, _)| p)
+}
+
+/// Run `gh` (echoed like the git commands that change something).
+pub fn gh(dir: &Path, args: &[&str]) -> Result<String> {
+    echo(dir, "gh", args, 1);
+    let out =
+        Command::new("gh").args(args).current_dir(dir).output().with_context(|| format!("running gh {}", args.first().unwrap_or(&"")))?;
+    if !out.status.success() {
+        bail!("gh {} failed: {}", args.iter().take(2).copied().collect::<Vec<_>>().join(" "), String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }

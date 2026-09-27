@@ -11,7 +11,6 @@ use crate::source_repo;
 use crate::store;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use std::process::Command;
 
 #[derive(Debug, Serialize)]
 pub struct ContributeReport {
@@ -105,40 +104,19 @@ pub fn contribute(ctx: &Ctx, name: &str, title: Option<&str>, body: Option<&str>
     }
     let (login, _) = ctx.gh.identity(&base_id.source.host).context("sign in with `gh auth login` to open pull requests")?;
     let full = base_id.source.full_name().to_string();
-    let fork =
-        Command::new("gh").args(["repo", "fork", &full, "--clone=false", "--remote=false"]).output().context("running gh repo fork")?;
-    if !fork.status.success() {
-        let err = String::from_utf8_lossy(&fork.stderr);
-        if !err.contains("already exists") {
-            bail!("gh repo fork failed: {err}");
-        }
+    if let Err(e) = git::gh(&wt_root, &["repo", "fork", &full, "--clone=false", "--remote=false"])
+        && !format!("{e:#}").contains("already exists")
+    {
+        return Err(e);
     }
     let fork_url = format!("https://{}/{login}/{}.git", base_id.source.host, base_id.source.name());
     rep.fork = Some(fork_url.clone());
-    git(&wt_root, &["push", "-q", &fork_url, &format!("HEAD:refs/heads/{branch}")])?;
+    git::run(&wt_root, &["push", "-q", &fork_url, &format!("HEAD:refs/heads/{branch}")])?;
     let body =
         body.map(String::from).unwrap_or_else(|| format!("Changes to `{up_path}` contributed via New Tricks.\n\n```\n{diffstat}\n```"));
-    let out = Command::new("gh")
-        .args([
-            "pr",
-            "create",
-            "--repo",
-            &full,
-            "--head",
-            &format!("{login}:{branch}"),
-            "--base",
-            &default,
-            "--title",
-            &msg,
-            "--body",
-            &body,
-        ])
-        .output()
-        .context("running gh pr create")?;
-    if !out.status.success() {
-        bail!("gh pr create failed: {}", String::from_utf8_lossy(&out.stderr));
-    }
-    rep.url = Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
+    let head = format!("{login}:{branch}");
+    rep.url =
+        Some(git::gh(&wt_root, &["pr", "create", "--repo", &full, "--head", &head, "--base", &default, "--title", &msg, "--body", &body])?);
     let _ = git(&mirror.dir, &["worktree", "remove", "--force", &wt_root.to_string_lossy()]);
     let _ = git::git_ok(&mirror.dir, &["worktree", "prune"]);
     Ok(rep)
