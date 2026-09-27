@@ -102,14 +102,21 @@ fn first_run_detects_agents_and_links_once_per_agent() {
     s.ok(&["--offline", "catalog", "list"]);
     let cfg = read(&s.config.join("tricks.toml"));
     assert!(cfg.contains(r#"agents = ["codex", "cursor"]"#), "{cfg}");
-    // Cursor loads ~/.agents/skills, where Codex's links go, so it is not linked twice.
+    // Cursor loads ~/.agents/skills, where Codex's links go, so it is not linked twice;
+    // except on Linux here, where the link would point into a hidden directory (the test's
+    // temporary one), which Cursor skips, so it gets a copy of its own.
     let ws = s.project("my-skills");
     git(&ws, &["init", "-q", "-b", "main"]);
     s.ok_in(&ws, &["init"]);
     s.ok_in(&ws, &["create", "greeter", "--description", "Greets people. Use when the user asks for a greeting."]);
     let o = s.cmd(&ws, &["link"]);
-    assert!(String::from_utf8_lossy(&o.stderr).contains("cursor loads user-scope skills from ~/.agents/skills"), "{o:?}");
     assert!(s.home.join(".agents/skills/greeter").exists());
+    let hidden = ws.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
+    if cfg!(target_os = "linux") && hidden {
+        assert!(s.home.join(".cursor/skills/greeter/SKILL.md").is_file(), "{o:?}");
+        return;
+    }
+    assert!(String::from_utf8_lossy(&o.stderr).contains("cursor loads user-scope skills from ~/.agents/skills"), "{o:?}");
     assert!(!s.home.join(".cursor/skills/greeter").exists());
     // Named agents are always linked.
     s.ok_in(&ws, &["link", "--agents", "cursor"]);
