@@ -6,8 +6,8 @@ Status of the implementation of [SPEC.md](SPEC.md), what was verified and how, t
 
 | Path | What |
 |---|---|
-| `crates/newtricks/src/` | Rust core + CLI (one crate, `lib` + `bin`). ~9k lines. |
-| `crates/newtricks/tests/` | Hermetic integration tests: the real binary against local "GitHub" repositories (`TRICKS_HOST_MAP`). |
+| `src/` | Rust core + CLI (one crate, `lib` + `bin`). ~9k lines. |
+| `tests/` | Hermetic integration tests: the real binary against local "GitHub" repositories (`TRICKS_HOST_MAP`). |
 | `skills/new-tricks/` | Bundled agent skill (spec §12); also installable with `npx skills add new-tricks/tricks`. |
 | `extension/` | VS Code extension (TypeScript, zero runtime dependencies) over `tricks serve --stdio`. |
 | `.github/workflows/` | CI (Linux/macOS/Windows tests, extension build, extension-host test), docs (build on PRs, deploy to Pages from main) and release (6 targets, checksums, platform VSIX, Marketplace/Open VSX publish). |

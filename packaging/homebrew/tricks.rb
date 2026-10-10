@@ -18,7 +18,7 @@ class Tricks < Formula
   depends_on "git"
 
   def install
-    system "cargo", "install", *std_cargo_args(path: "crates/newtricks")
+    system "cargo", "install", *std_cargo_args
   end
 
   test do

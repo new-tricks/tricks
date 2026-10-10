@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "tricks.toml",
-  "description": "New Tricks configuration: a source repo's manifest (`[source-repo]`, `[skills]`, `[lint]`, `[publish]`) or the user config at ~/.config/newtricks/tricks.toml (`[settings]`, `[catalogs]`, `[source-repos]`). Resolved facts live in tricks.lock. Keep in sync with crates/newtricks/src/config.rs (a unit test checks the keys).",
+  "description": "New Tricks configuration: a source repo's manifest (`[source-repo]`, `[skills]`, `[lint]`, `[publish]`) or the user config at ~/.config/newtricks/tricks.toml (`[settings]`, `[catalogs]`, `[source-repos]`). Resolved facts live in tricks.lock. Keep in sync with src/config.rs (a unit test checks the keys).",
   "type": "object",
   "definitions": {
     "policy": {

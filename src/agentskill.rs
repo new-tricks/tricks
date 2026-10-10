@@ -9,7 +9,7 @@ use crate::store;
 use anyhow::Result;
 
 pub const KEY: &str = "bundled:new-tricks";
-pub const SKILL_MD: &str = include_str!("../../../skills/new-tricks/SKILL.md");
+pub const SKILL_MD: &str = include_str!("../skills/new-tricks/SKILL.md");
 
 /// Place the bundled skill for `agents_sel` in `scope`.
 pub fn install(ctx: &Ctx, agents_sel: &[&'static Agent], scope: &Scope) -> Result<Vec<String>> {

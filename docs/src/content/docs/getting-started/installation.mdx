@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install the tricks command with Homebrew, the VS Code extension, a release binary or from source, then check your setup with tricks doctor.
+description: Install the tricks command with Homebrew, Cargo, the VS Code extension, a release binary or from source, then check your setup with tricks doctor.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -22,6 +22,15 @@ On macOS or Linux with [Homebrew](https://brew.sh):
 
 ```bash
 brew install new-tricks/tap/tricks
+```
+
+</TabItem>
+<TabItem label="Cargo">
+
+With a Rust toolchain (1.89 or later) and git, from [crates.io](https://crates.io/crates/tricks):
+
+```bash
+cargo install tricks --locked                            # installs tricks into ~/.cargo/bin
 ```
 
 </TabItem>
@@ -94,7 +103,7 @@ With a Rust toolchain (1.89 or later) and git:
 ```bash
 git clone https://github.com/new-tricks/tricks
 cd tricks
-cargo install --path crates/newtricks                    # installs tricks into ~/.cargo/bin
+cargo install --path . --locked                          # installs tricks into ~/.cargo/bin
 ```
 
 </TabItem>
@@ -164,8 +173,9 @@ How you upgrade depends on how you installed:
 |---|---|
 | Homebrew | `brew upgrade tricks` |
 | VS Code extension | Updating the extension updates its bundled binary |
+| Cargo | `cargo install tricks --locked` |
 | Release binary or other standalone install | `tricks upgrade` |
-| From source | `git pull` and `cargo install --path crates/newtricks` again |
+| From source | `git pull` and `cargo install --path . --locked` again |
 
 [`tricks upgrade`](/tricks/reference/commands/upgrade/) downloads the latest release for your platform from GitHub, verifies its SHA-256 checksum, and replaces the running binary in place. `tricks upgrade --check` only reports whether a newer release exists:
 
@@ -177,7 +187,7 @@ tricks upgrade --check
 New Tricks 0.7.1 is up to date
 ```
 
-`tricks upgrade` recognizes the other install methods and tells you what to do instead of overwriting a managed binary. For a Homebrew install it prints ``installed with Homebrew: run `brew upgrade tricks` ``; for the binary bundled with the extension, `bundled with the VS Code extension: it updates with the extension`.
+`tricks upgrade` recognizes the other install methods and tells you what to do instead of overwriting a managed binary. For a Homebrew install it prints ``installed with Homebrew: run `brew upgrade tricks` ``; for one in Cargo's `bin` directory, ``installed with Cargo: run `cargo install tricks --locked` ``; for the binary bundled with the extension, `bundled with the VS Code extension: it updates with the extension`.
 
 ## Where New Tricks keeps its files
 

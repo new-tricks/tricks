@@ -1,9 +1,10 @@
-//! `tricks upgrade` for standalone installs (spec §16). Homebrew and
+//! `tricks upgrade` for standalone installs (spec §16). Homebrew, Cargo and
 //! VS Code-bundled binaries are updated by their package managers.
 
 use crate::ctx::Ctx;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// Release repository; override with TRICKS_RELEASE_REPO.
 pub const RELEASE_REPO: &str = "new-tricks/tricks";
@@ -60,6 +61,15 @@ pub fn run(ctx: &Ctx, check_only: bool) -> Result<UpgradeReport> {
             latest: None,
             updated: false,
             message: "bundled with the VS Code extension: it updates with the extension".into(),
+        });
+    }
+    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".cargo")));
+    if in_cargo_bin(&exe, cargo_home.as_deref()) {
+        return Ok(UpgradeReport {
+            current,
+            latest: None,
+            updated: false,
+            message: "installed with Cargo: run `cargo install tricks --locked`".into(),
         });
     }
     let repo = std::env::var("TRICKS_RELEASE_REPO").unwrap_or_else(|_| RELEASE_REPO.into());
@@ -129,4 +139,23 @@ pub fn run(ctx: &Ctx, check_only: bool) -> Result<UpgradeReport> {
     std::fs::rename(&staged, &exe)?;
     let _ = std::fs::remove_file(&old);
     Ok(UpgradeReport { current, latest: Some(latest.clone()), updated: true, message: format!("updated to New Tricks {latest}") })
+}
+
+/// Whether `exe` is in Cargo's `bin` directory, where `cargo install` puts it.
+fn in_cargo_bin(exe: &Path, cargo_home: Option<&Path>) -> bool {
+    cargo_home.is_some_and(|home| exe.parent() == Some(home.join("bin").as_path()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cargo_installs_are_left_to_cargo() {
+        let home = Path::new("/home/u/.cargo");
+        assert!(in_cargo_bin(&home.join("bin").join("tricks"), Some(home)));
+        assert!(!in_cargo_bin(Path::new("/home/u/.local/bin/tricks"), Some(home)));
+        assert!(!in_cargo_bin(&home.join("bin").join("sub").join("tricks"), Some(home)));
+        assert!(!in_cargo_bin(&home.join("bin").join("tricks"), None));
+    }
 }
