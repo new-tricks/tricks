@@ -2,7 +2,7 @@
 # On crates.io as `tricks`, the command it installs. The library keeps its
 # name, so `cargo doc` doesn't have a lib and a bin both called `tricks`.
 name = "tricks"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2024"
 description = "New Tricks: teach your agents new tricks. The design-time workbench for agent skills: federated search, customization with upstream merges, branch experiments, lint and publish."
 license = "Apache-2.0"

@@ -19,6 +19,8 @@ New Tricks' own conventions:
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-10
+
 ### Added
 
 - `cargo install tricks --locked` installs New Tricks from
@@ -164,7 +166,8 @@ New Tricks' own conventions:
   signals (including Tessl and ClawHub), vendoring with upstream merges, lint
   and publish, the VS Code extension and the Homebrew tap.
 
-[Unreleased]: https://github.com/new-tricks/tricks/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/new-tricks/tricks/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/new-tricks/tricks/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/new-tricks/tricks/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/new-tricks/tricks/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/new-tricks/tricks/compare/v0.5.0...v0.6.0
