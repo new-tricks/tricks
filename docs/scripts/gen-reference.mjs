@@ -1,6 +1,6 @@
 // Generate the reference pages that must match the code exactly:
 //   reference/commands/*  from `tricks <command> --help` (the binary built from this repo)
-//   reference/lint-rules  from the RULES table in crates/newtricks/src/lint.rs
+//   reference/lint-rules  from the RULES table in src/lint.rs
 // The output is git-ignored; `npm run dev` and `npm run build` regenerate it.
 //
 // The binary: $TRICKS_BIN, else the newest of target/release/tricks and target/debug/tricks.
@@ -145,7 +145,7 @@ index += 'With `--json`, commands print one JSON document on stdout (the shape t
 writeFileSync(join(cmdDir, 'index.md'), index);
 
 // ---------------------------------------------------------------- lint rules
-const lint = readFileSync(join(repo, 'crates/newtricks/src/lint.rs'), 'utf8');
+const lint = readFileSync(join(repo, 'src/lint.rs'), 'utf8');
 const block = lint.slice(lint.indexOf('pub const RULES'), lint.indexOf('];', lint.indexOf('pub const RULES')));
 const rules = [...block.matchAll(/\("(NT\d{3})",\s*"(\w+)",\s*"((?:[^"\\]|\\.)*)"\)/g)].map((m) => ({
 	code: m[1],

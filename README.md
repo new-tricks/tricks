@@ -12,7 +12,8 @@ discover ─► create / vendor ─► experiment ─► link & try with agents 
 
 ```bash
 brew install new-tricks/tap/tricks
-cargo install --path crates/newtricks          # from a checkout
+cargo install tricks --locked                  # from crates.io
+cargo install --path . --locked                # from a checkout
 ```
 
 Requires `git`. Uses your existing GitHub credentials (`GITHUB_TOKEN`, then `gh auth token`); nothing is stored.

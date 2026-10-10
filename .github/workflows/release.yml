@@ -1,13 +1,18 @@
 name: Release
 
-# Tag vX.Y.Z to build binaries, checksums and platform VSIX packages, then (when
-# secrets are configured) publish to the VS Code Marketplace and Open VSX and update
-# the Homebrew tap.
+# Tag vX.Y.Z (./release.sh tag) to build binaries, checksums and platform VSIX
+# packages and publish a GitHub release whose notes are the version's section of
+# CHANGELOG.md, then (when secrets are configured) publish to the VS Code
+# Marketplace and Open VSX and update the Homebrew tap, and publish the crate to
+# crates.io. crates.io uses trusted publishing: it trusts this workflow in the
+# crates-io environment, and the crates job trades GitHub's OIDC token for a
+# short-lived crates.io token. No token is stored.
 on:
   push:
     tags: ["v*"]
-  # Re-run marketplace publishing for an existing release (e.g. after a transient
-  # Marketplace error). Versions already published are skipped.
+  # Re-run marketplace, Homebrew and crates.io publishing for an existing release
+  # (e.g. after a transient Marketplace error). Versions already published are
+  # skipped.
   workflow_dispatch:
     inputs:
       tag:
@@ -18,8 +23,29 @@ permissions:
   contents: write
 
 jobs:
-  binaries:
+  # Before anything is built or public: a published version can't be replaced.
+  check:
     if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check the tag matches Cargo.toml and the extension
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          extension=$(jq -r .version extension/package.json)
+          if [ "v$version" != "$GITHUB_REF_NAME" ] || [ "$extension" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME, Cargo.toml $version and extension/package.json $extension don't match" >&2
+            exit 1
+          fi
+      # A tag whose version CHANGELOG.md doesn't have fails here, before the build.
+      - name: Check CHANGELOG.md has the release notes
+        run: ./release.sh changelog "${GITHUB_REF_NAME#v}"
+      - name: Check the crate packages
+        run: cargo publish --dry-run --locked
+
+  binaries:
+    needs: check
     strategy:
       fail-fast: false
       matrix:
@@ -80,6 +106,9 @@ jobs:
     needs: binaries
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Take the release notes from CHANGELOG.md
+        run: ./release.sh changelog "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/notes.md"
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -87,7 +116,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
-          generate_release_notes: true
+          body_path: ${{ runner.temp }}/notes.md
 
   publish:
     needs: release
@@ -148,3 +177,38 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "tricks ${TAG#v}"
           git push
+
+  crates:
+    needs: release
+    if: always() && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write # traded for a crates.io token
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      # On a re-run, a version already published is skipped.
+      - name: Check crates.io
+        id: published
+        run: |
+          if curl -fsS -o /dev/null -A "tricks release workflow (https://github.com/$GITHUB_REPOSITORY)" \
+              "https://crates.io/api/v1/crates/tricks/${TAG#v}"; then
+            echo "tricks ${TAG#v} is on crates.io already"
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.published.outputs.done != 'true'
+      # Revoked when the job ends.
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        if: steps.published.outputs.done != 'true'
+        id: auth
+      - run: cargo publish --locked
+        if: steps.published.outputs.done != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

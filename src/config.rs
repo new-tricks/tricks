@@ -372,7 +372,7 @@ mod tests {
     /// keys the code reads.
     #[test]
     fn json_schema_matches_config() {
-        let schema: serde_json::Value = serde_json::from_str(include_str!("../../../extension/schemas/tricks.schema.json")).unwrap();
+        let schema: serde_json::Value = serde_json::from_str(include_str!("../extension/schemas/tricks.schema.json")).unwrap();
         let p = &schema["properties"];
         let skill = RepoSkill {
             path: "p".into(),
